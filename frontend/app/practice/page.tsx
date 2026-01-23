@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
     Mic,
     Video,
@@ -14,7 +14,8 @@ import {
     ArrowRight,
     Sparkles,
     ChevronLeft,
-    Send
+    Send,
+    BrainCircuit
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -124,91 +125,234 @@ export default function PracticePage() {
 
 function PitchSimulator({ onBack }: { onBack: () => void }) {
     const [recording, setRecording] = useState(false);
-    const [complete, setComplete] = useState(false);
+    const [status, setStatus] = useState<'idle' | 'recording' | 'processing' | 'done'>('idle');
+    const [analysisResult, setAnalysisResult] = useState<any>(null);
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const chunksRef = useRef<Blob[]>([]);
+
+    useEffect(() => {
+        if (status === 'recording' && videoRef.current && streamRef.current) {
+            videoRef.current.srcObject = streamRef.current;
+        }
+    }, [status]);
+
+    const startRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: 1280, height: 720 },
+                audio: true
+            });
+            streamRef.current = stream;
+
+            const mediaRecorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = mediaRecorder;
+            chunksRef.current = [];
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) chunksRef.current.push(e.data);
+            };
+
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
+
+                const canvas = document.createElement('canvas');
+                if (videoRef.current) {
+                    canvas.width = videoRef.current.videoWidth;
+                    canvas.height = videoRef.current.videoHeight;
+                    canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0);
+                }
+                const videoFrameBase64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+
+                const reader = new FileReader();
+                reader.readAsDataURL(audioBlob);
+                reader.onloadend = async () => {
+                    const audioBase64 = (reader.result as string).split(',')[1];
+                    await sendToAI(videoFrameBase64, audioBase64);
+                };
+
+                stream.getTracks().forEach(track => track.stop());
+                streamRef.current = null;
+            };
+
+            setStatus('recording');
+            setRecording(true);
+            mediaRecorder.start();
+        } catch (err) {
+            console.error("Error accessing media devices:", err);
+            alert("Please allow camera and microphone access to use the simulator.");
+        }
+    };
+
+    const stopRecording = () => {
+        if (mediaRecorderRef.current && recording) {
+            mediaRecorderRef.current.stop();
+            setRecording(false);
+            setStatus('processing');
+        }
+    };
+
+    const sendToAI = async (videoFrame: string, audio: string) => {
+        try {
+            const response = await fetch('http://localhost:8000/api/v1/pitch/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    video_base64: videoFrame,
+                    audio_base64: audio,
+                    transcript: ""
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Analysis failed');
+            }
+
+            const data = await response.json();
+            setAnalysisResult(data);
+            setStatus('done');
+        } catch (err) {
+            console.error("Error calling AI:", err);
+            alert("The AI agents hit a snag. Please check the backend logs.");
+            setStatus('idle');
+        }
+    };
 
     return (
-        <div className="max-w-5xl mx-auto space-y-8 animate-fade-in">
+        <div className="max-w-5xl mx-auto space-y-8 animate-fade-in pb-20">
             <div className="flex items-center justify-between">
                 <button onClick={onBack} className="text-muted-foreground hover:text-foreground flex items-center gap-2">
                     <ChevronLeft className="w-5 h-5" /> All Simulations
                 </button>
                 <div className="flex items-center gap-4">
-                    <span className="text-xs font-bold px-3 py-1 bg-green-500/10 text-green-500 rounded-full">AI Analysis Active</span>
+                    <span className="text-xs font-bold px-3 py-1 bg-primary/10 text-primary rounded-full border border-primary/20">
+                        Agent Brain: LangGraph v1.2
+                    </span>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 text-white">
                 <div className="lg:col-span-2 space-y-6">
-                    <div className="glass-card bg-slate-900 border-primary/20 aspect-video flex items-center justify-center relative overflow-hidden">
-                        {!recording && !complete && (
+                    <div className="glass-card bg-slate-950 border-white/5 aspect-video flex items-center justify-center relative overflow-hidden rounded-3xl shadow-2xl">
+                        {status === 'idle' && (
                             <div className="text-center p-12">
-                                <div className="w-20 h-20 rounded-full bg-primary/20 flex items-center justify-center mx-auto mb-6">
-                                    <Play className="w-8 h-8 text-primary fill-current" />
+                                <div className="w-24 h-24 rounded-full bg-gradient-to-br from-primary/30 to-secondary/30 flex items-center justify-center mx-auto mb-8 shadow-inner">
+                                    <Video className="w-10 h-10 text-primary animate-pulse" />
                                 </div>
-                                <h2 className="text-3xl font-bold mb-4 font-heading">Ready to Pitch?</h2>
-                                <p className="text-muted-foreground max-w-sm">We'll analyze your tone, pace, and clarity. Use your microphone to speak naturally.</p>
-                                <button onClick={() => setRecording(true)} className="btn-primary mt-8">
-                                    Start Recording
+                                <h2 className="text-4xl font-bold mb-4 font-heading tracking-tight">Ready to pitch?</h2>
+                                <p className="text-muted-foreground max-w-sm mx-auto text-lg">
+                                    Our multi-agent system will analyze your posture, tone, and stress levels once you finish.
+                                </p>
+                                <button onClick={startRecording} className="btn-primary mt-10 px-10 py-4 text-lg bg-gradient-to-r from-primary to-secondary border-none hover:scale-105 transition-transform">
+                                    Start Session
                                 </button>
                             </div>
                         )}
 
-                        {recording && (
-                            <div className="w-full h-full flex flex-col items-center justify-center relative">
-                                <div className="w-32 h-32 rounded-full bg-red-500/20 flex items-center justify-center animate-pulse">
-                                    <Mic className="w-12 h-12 text-red-500" />
+                        {(status === 'recording' || status === 'processing') && (
+                            <video
+                                ref={videoRef}
+                                autoPlay
+                                muted
+                                playsInline
+                                className={cn("w-full h-full object-cover grayscale-[0.3] brightness-90", status === 'processing' && "blur-sm opacity-50")}
+                            />
+                        )}
+
+                        {status === 'recording' && (
+                            <div className="absolute top-6 left-6 flex items-center gap-3 bg-red-500/10 backdrop-blur-md px-4 py-2 rounded-full border border-red-500/20">
+                                <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
+                                <span className="text-xs font-bold uppercase tracking-widest">Live Recording</span>
+                            </div>
+                        )}
+
+                        {status === 'processing' && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center p-12 text-center bg-black/60 backdrop-blur-md">
+                                <Sparkles className="w-16 h-16 text-primary animate-bounce mb-6" />
+                                <h2 className="text-3xl font-bold mb-3 font-heading">Consulting Agents...</h2>
+                                <p className="text-muted-foreground text-lg">The Posture, Tone, and Stress agents are compiling your report.</p>
+                                <div className="mt-8 flex gap-2">
+                                    <div className="w-2 h-2 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]" />
+                                    <div className="w-2 h-2 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]" />
+                                    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" />
                                 </div>
-                                <div className="mt-8 flex gap-1 h-8">
-                                    {[...Array(20)].map((_, i) => (
-                                        <div key={i} className="w-1.5 bg-primary/50 self-end rounded-full" style={{ height: `${Math.random() * 100}%` }} />
-                                    ))}
+                            </div>
+                        )}
+
+                        {status === 'done' && (
+                            <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-secondary/20 flex flex-col items-center justify-center p-12 text-center">
+                                <div className="w-20 h-20 rounded-full bg-green-500/20 flex items-center justify-center mb-6 border border-green-500/30">
+                                    <ShieldCheck className="w-10 h-10 text-green-500" />
                                 </div>
-                                <button onClick={() => { setRecording(false); setComplete(true); }} className="absolute bottom-8 px-6 py-2 rounded-xl bg-red-500 text-white font-bold">
-                                    Stop Session
+                                <h2 className="text-4xl font-bold mb-4 font-heading">Analysis Complete!</h2>
+                                <p className="text-muted-foreground text-lg mb-8">Scroll down to view your personal coaching report.</p>
+                                <button onClick={() => setStatus('idle')} className="px-6 py-2 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 text-sm font-bold uppercase tracking-widest transition-all">
+                                    New Session
                                 </button>
                             </div>
                         )}
 
-                        {complete && (
-                            <div className="w-full h-full flex flex-col items-center justify-center p-12 bg-black/40 backdrop-blur-sm">
-                                <Sparkles className="w-12 h-12 text-primary mb-4" />
-                                <h2 className="text-2xl font-bold mb-2">Analyzing Performance...</h2>
-                                <p className="text-muted-foreground">Our AI is processing your tone and clarity markers.</p>
-                            </div>
+                        {status === 'recording' && (
+                            <button
+                                onClick={stopRecording}
+                                className="absolute bottom-10 left-1/2 -translate-x-1/2 px-10 py-4 rounded-full bg-red-500 text-white font-bold text-lg hover:bg-red-600 shadow-xl shadow-red-500/20 transition-all active:scale-95"
+                            >
+                                Finish & Analyze
+                            </button>
                         )}
                     </div>
 
-                    <div className="glass-card p-6">
-                        <h3 className="font-bold mb-4">Pitch Instructions</h3>
-                        <ul className="space-y-3 text-sm text-muted-foreground">
-                            <li className="flex gap-3"><CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" /> Focus on a strong opening hook.</li>
-                            <li className="flex gap-3"><CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" /> Keep your pace between 130-150 words per minute.</li>
-                            <li className="flex gap-3"><CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" /> Use "Power Pauses" after key points.</li>
-                        </ul>
+                    <div className="glass-card p-8 bg-slate-900/50">
+                        <h3 className="text-xl font-bold mb-6 flex items-center gap-3">
+                            <Send className="w-5 h-5 text-primary" /> Training Best Practices
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-4">
+                                <InstructionItem icon={Mic} text="Keep your volume consistent but vary your pitch to avoid sounding monotone." />
+                                <InstructionItem icon={Users} text="Imagine your audience is in front of the lens. Look into the camera." />
+                            </div>
+                            <div className="space-y-4">
+                                <InstructionItem icon={Zap} text="Acknowledge stress. Take a deep breath before transitions." />
+                                <InstructionItem icon={Video} text="Check your posture. Shoulders should be aligned and relaxed." />
+                            </div>
+                        </div>
                     </div>
                 </div>
 
                 <div className="space-y-6">
-                    <div className="glass-card p-6">
-                        <h3 className="font-bold mb-6 flex items-center justify-between">
-                            Live Metrics <LineChart className="w-4 h-4 text-muted-foreground" />
+                    <div className="glass-card p-8 border-white/5 bg-slate-900/40">
+                        <h3 className="text-xl font-bold mb-8 flex items-center justify-between">
+                            Executive Competencies <LineChart className="w-5 h-5 text-muted-foreground" />
                         </h3>
-                        <div className="space-y-6">
-                            <MetricBar label="Clarity" value={complete ? 88 : 0} color="bg-primary" />
-                            <MetricBar label="Confidence" value={complete ? 75 : 0} color="bg-secondary" />
-                            <MetricBar label="Empathy" value={complete ? 92 : 0} color="bg-accent" />
-                            <MetricBar label="Filler Words" value={complete ? 15 : 0} color="bg-red-500" />
+                        <div className="space-y-8">
+                            <MetricBar label="Authority" value={analysisResult?.competency_map?.Authority || 0} color="bg-primary shadow-[0_0_12px_rgba(59,130,246,0.5)]" />
+                            <MetricBar label="Empathy" value={analysisResult?.competency_map?.Empathy || 0} color="bg-secondary shadow-[0_0_12px_rgba(139,92,246,0.5)]" />
+                            <MetricBar label="Resilience" value={analysisResult?.competency_map?.Resilience || 0} color="bg-accent shadow-[0_0_12px_rgba(236,72,153,0.5)]" />
+                            <MetricBar label="Persuasion" value={analysisResult?.competency_map?.Persuasion || 0} color="bg-gradient-to-r from-primary to-secondary" />
                         </div>
                     </div>
 
-                    {complete && (
-                        <div className="glass-card p-6 border-primary/40 bg-primary/5 animate-fade-in">
-                            <h3 className="font-bold mb-4 flex items-center gap-2 text-primary">
-                                <Zap className="w-4 h-4" /> AI Feedback
+                    {status === 'done' && analysisResult && (
+                        <div className="glass-card p-8 border-primary/30 bg-primary/5 animate-fade-in ring-1 ring-primary/20">
+                            <h3 className="text-xl font-bold mb-6 flex items-center gap-3 text-primary tracking-tight">
+                                <Sparkles className="w-5 h-5" /> Coach's Summary
                             </h3>
-                            <p className="text-sm text-muted-foreground italic leading-relaxed">
-                                "Your clarity was excellent, but your confidence dropped slightly in the middle. Try more 'Active Gestures' to maintain energy."
+                            <p className="text-lg text-muted-foreground italic leading-relaxed mb-8 border-l-2 border-primary/30 pl-6">
+                                "{typeof analysisResult.summary === 'string' ? analysisResult.summary : 'Great work on your pitch! See the details below.'}"
                             </p>
+                            <h4 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-4">Key Recommendations</h4>
+                            <ul className="space-y-4">
+                                {analysisResult?.recommendations?.map((rec: any, i: number) => (
+                                    <li key={i} className="flex gap-4 text-sm font-medium">
+                                        <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs flex-shrink-0 mt-0.5 font-bold">
+                                            {i + 1}
+                                        </div>
+                                        <span className="text-muted-foreground">{typeof rec === 'string' ? rec : JSON.stringify(rec)}</span>
+                                    </li>
+                                ))}
+                            </ul>
                         </div>
                     )}
                 </div>
@@ -217,15 +361,33 @@ function PitchSimulator({ onBack }: { onBack: () => void }) {
     );
 }
 
+function InstructionItem({ icon: Icon, text }: { icon: any, text: string }) {
+    return (
+        <div className="flex gap-4 p-4 rounded-2xl bg-white/5 border border-white/5">
+            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+                <Icon className="w-5 h-5 text-primary" />
+            </div>
+            <p className="text-sm text-muted-foreground leading-relaxed">{text}</p>
+        </div>
+    );
+}
+
+
 function MetricBar({ label, value, color }: { label: string, value: number, color: string }) {
     return (
-        <div className="space-y-2">
-            <div className="flex justify-between text-xs font-bold uppercase tracking-wider text-muted-foreground">
+        <div className="space-y-3">
+            <div className="flex justify-between text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/60">
                 <span>{label}</span>
-                <span>{value}%</span>
+                <span className="text-foreground">{value}%</span>
             </div>
-            <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
-                <div className={cn("h-full transition-all duration-1000", color)} style={{ width: `${value}%` }} />
+            <div className="relative w-full h-1.5 bg-white/5 rounded-full">
+                <div
+                    className={cn("absolute h-full rounded-full transition-all duration-1000 ease-out", color)}
+                    style={{
+                        width: `${value}%`,
+                        filter: 'blur(0.5px)' // Slight blur for 'liquid' look
+                    }}
+                />
             </div>
         </div>
     );
@@ -281,25 +443,7 @@ function CollaborationSimulator({ onBack }: { onBack: () => void }) {
     );
 }
 
-// Dummy Icon for BrainCircuit if not in lucide
-function BrainCircuit(props: any) {
-    return (
-        <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="24" height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            {...props}
-        >
-            <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .52 8.242 4.2 4.2 0 0 0 7.132-.907 4 4 0 0 0 7.132.907 4.2 4.2 0 0 0 .52-8.242 4 4 0 0 0-2.526-5.77A3 3 0 1 0 12 5" />
-            <path d="M9 13h1" /><path d="M14 13h1" /><path d="M12 16v1" /><path d="M12 10v1" />
-        </svg>
-    );
-}
+// BrainCircuit is now imported from lucide-react
 
 function CheckCircle2(props: any) {
     return (
