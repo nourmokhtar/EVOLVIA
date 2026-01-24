@@ -40,7 +40,7 @@ evolvia/
 ```bash
 cd backend
 python -m venv venv
-source venv/bin/scripts/activate  # On Windows: .\venv\Scripts\activate
+source  # On Windows: .\venv\Scripts\activate
 pip install -r requirements.txt
 python -m uvicorn app.main:app --reload
 ```

@@ -30,6 +30,14 @@ async def aggregator_node(state: PitchAnalysisState):
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are the Lead Executive Coach. 
              Synthesize the data into a high-impact growth plan.
+             
+             INPUT DATA to consider:
+             - Posture: Look at 'head_lift_score', 'hands_visible', and 'strengths'.
+             - Tone: Look at 'wpm', 'silence_ratio', and 'pitch_variance'.
+             - Stress: Look at 'stress_score' and 'nervous_habits'.
+             
+             Generate a Summary that specifically references these details (e.g. 'Your high head lift showed confidence, but your fast WPM suggests anxiety').
+
              Respond ONLY in a single valid JSON object. 
              IMPORTANT: Do not use unescaped double quotes inside strings. Use single quotes if necessary.
              

@@ -32,15 +32,30 @@ async def posture_agent(state: PitchAnalysisState):
         )
         
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an world-class Executive Body Language Expert. 
-             Analyze the provided metrics and return a sophisticated JSON analysis.
-             Respond ONLY in valid JSON.
+            ("system", """You are a specialized Presentation Coach focusing on Non-Verbal Communication.
+             Analyze the provided computer vision metrics to give a detailed performance review.
+
+             METRICS EXPLANATION:
+             - 'head_lift_score': Measures vertical projection. High = Confident/Projecting. Low = Looking down/Reading notes.
+             - 'hands_visible': Count (0-2). Uses hands = Dynamic/Engaging. Static hands = Rigid.
+             - 'shoulder_symmetry': Measures posture balance. High = Level/Professional. Low = Slouching.
+             - 'alignment_score': Measures centering. High = Focused on audience.
+
+             YOUR TASK:
+             1. Calculate an internal score based on these metrics (weigh Head Lift and Hands heavily for presenters).
+             2. Provide a detailed prose 'feedback' summary covering the overall impression.
+             3. List specific 'strengths' (what they did well).
+             4. List specific 'improvements' (actionable advice).
+
+             Respond ONLY in valid JSON:
              {{
-                "score": int,
-                "feedback": "string",
-                "authority_rating": int,
-                "engagement_rating": int,
-                "is_good": bool
+                "score": int, (0-100)
+                "feedback": "string", (2-3 sentences summarizing the performance, mentioning both good and bad)
+                "strengths": ["string", "string"], (List of positive observations)
+                "improvements": ["string", "string"], (List of things to fix)
+                "authority_rating": int, (0-10)
+                "engagement_rating": int, (0-10)
+                "is_good": bool (true if score > 70)
              }}
              """),
             ("user", "Live Metrics: {metrics}")

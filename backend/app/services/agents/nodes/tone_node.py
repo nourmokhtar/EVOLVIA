@@ -25,6 +25,17 @@ async def tone_agent(state: PitchAnalysisState):
             audio_base64 = base64.b64encode(audio_chunk).decode('utf-8')
             metrics = analyze_vocal_delivery.invoke(audio_base64)
         
+        # 1. ENRICH METRICS WITH WPM
+        word_count = len(transcript.split())
+        duration = metrics.get("duration", 0)
+        
+        wpm = 0
+        if duration > 0 and word_count > 0:
+            wpm = int((word_count / duration) * 60)
+        
+        metrics["wpm"] = wpm
+        metrics["word_count"] = word_count
+        
         llm = ChatGroq(
             model="llama-3.1-8b-instant",
             temperature=0.1,
@@ -34,13 +45,22 @@ async def tone_agent(state: PitchAnalysisState):
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a Vocal Psychology expert. 
+             Analyze the speaker's delivery based on the provided acoustic metrics and text.
+             
+             METRICS EXPLANATION:
+             - 'wpm' (Words Per Minute): Normal is 130-150. >160 is fast/anxious. <110 is slow.
+             - 'pitch_variance': High (>25) = Expressive/Dynamic. Low (<15) = Monotone/Bored.
+             - 'silence_ratio': High (>0.2) = Many pauses (thoughtful or hesitant). Low = Continuous speech.
+             - 'volume_level': Energy indicator.
+
              Analyze the relationship between the TEXT content and the VOCAL metrics.
              Respond ONLY in valid JSON.
              {{
-                "score": int,
-                "feedback": "string",
+                "score": int, (0-100, based on engagement)
+                "feedback": "string", (Specific advice on speed, tone, and pauses)
                 "empathy_score": int,
                 "energy_level": "Low/Calm/Dynamic/High",
+                "speaking_rate_rating": "Slow/Ideal/Fast",
                 "voice_type": "string"
              }}
              """),
