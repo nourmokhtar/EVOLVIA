@@ -4,11 +4,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api import auth, user, lessons, quizzes, ai_teacher, pitch, collaboration, personality
 from app.core.config import settings
+from app.db.session import engine
+from sqlmodel import SQLModel
+
+# Import all models to register them with SQLModel
+from app.models import User, Lesson, Quiz, Question, UserProgress
 
 app = FastAPI(
     title="Evolvia API",
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
+
+# Create database tables on startup
+@app.on_event("startup")
+def on_startup():
+    """Create database tables on application startup"""
+    SQLModel.metadata.create_all(engine)
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,3 +46,6 @@ app.include_router(personality.router, prefix=f"{settings.API_V1_STR}/personalit
 @app.get("/")
 def root():
     return {"message": "Welcome to Evolvia API"}
+
+
+

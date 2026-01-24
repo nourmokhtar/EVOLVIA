@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 from app.models import Lesson
+from app.models import User
+from app.core.security import get_current_user
 
 router = APIRouter()
 
 @router.get("/", response_model=List[Lesson])
-async def get_lessons():
+async def get_lessons(current_user: User = Depends(get_current_user)):
+    """Get all available lessons"""
     # Placeholder: In a real app, fetch from DB
     return [
         Lesson(
@@ -27,7 +30,8 @@ async def get_lessons():
     ]
 
 @router.get("/{lesson_id}", response_model=Lesson)
-async def get_lesson(lesson_id: str):
+async def get_lesson(lesson_id: str, current_user: User = Depends(get_current_user)):
+    """Get a specific lesson by ID"""
     return Lesson(
         id=lesson_id,
         title="Sample Lesson",

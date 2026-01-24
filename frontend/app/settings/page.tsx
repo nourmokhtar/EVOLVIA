@@ -12,11 +12,15 @@ import {
     LogOut
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
+import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/app/context/AuthContext';
 import { useEffect, useState } from 'react';
 
 export default function SettingsPage() {
     const { theme, setTheme } = useTheme();
+    const { logout } = useAuth();
+    const router = useRouter();
     const [mounted, setMounted] = useState(false);
 
     // Prevent hydration mismatch
@@ -92,7 +96,13 @@ export default function SettingsPage() {
 
                 <div className="p-8 bg-black/20 border-t border-border flex items-center justify-between">
                     <p className="text-sm text-muted-foreground">V 1.0.4 Pre-Alpha</p>
-                    <button className="flex items-center gap-2 text-red-500 font-bold text-sm uppercase tracking-widest hover:text-red-400 transition-colors">
+                    <button 
+                        onClick={() => {
+                            logout();
+                            router.push('/login');
+                        }}
+                        className="flex items-center gap-2 text-red-500 font-bold text-sm uppercase tracking-widest hover:text-red-400 transition-colors"
+                    >
                         <LogOut className="w-4 h-4" /> Sign Out
                     </button>
                 </div>
