@@ -17,7 +17,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://evolvia-6u8e.vercel.app", # Replace this with your actual Vercel domain
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
