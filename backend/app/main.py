@@ -1,4 +1,8 @@
 import os
+
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -6,6 +10,9 @@ from app.api import auth, user, lessons, quizzes, ai_teacher, pitch, collaborati
 from app.core.config import settings
 from app.db.session import engine
 from sqlmodel import SQLModel
+
+
+
 
 # Import all models to register them with SQLModel
 from app.models import User, Lesson, Quiz, Question, UserProgress

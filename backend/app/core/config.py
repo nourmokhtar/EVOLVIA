@@ -1,9 +1,8 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 import os
+from pydantic import Field
 
-from dotenv import load_dotenv
-load_dotenv()
 class Settings(BaseSettings):
     PROJECT_NAME: str = os.getenv("PROJECT_NAME", "AI Virtual Closet")
     # "AI Virtual Closet"
@@ -40,14 +39,38 @@ class Settings(BaseSettings):
     # True
     # Configure Opik for observability and tracing
     opik_api_key:str = os.getenv("OPIK_API_KEY", "KlHeYE6IiENcxZkxf2gAXkc90")
-    # "QTidL9OQfdTrl7TQB6CWXpI9t"
+   
     # os.getenv("OPIK_API_KEY")
     opik_project_name:str = os.getenv("OPIK_PROJECT_NAME", "or-ro")
-    opik_workspace:str = os.getenv("OPIK_WORKSPACE", "nour-mokhtar-1235")
+    opik_workspace:str = os.getenv("OPIK_WORKSPACE", "test")
     # "nour-mokhtar-1235"
     # "evolvia-coaching-platform"
-    # os.getenv("OPIK_PROJECT_NAME", "personality-analysis")
+
+
+    # In your Settings class, add these fields:
+
+    # ESPRIT API Configuration
+    USE_ESPRIT_FOR_PERSONALITY: bool = Field(
+        default=False, 
+        env="USE_ESPRIT_FOR_PERSONALITY"
+    )
+    ESPRIT_API_KEY: str = Field(
+        default="", 
+        env="ESPRIT_API_KEY"
+    )
+    ESPRIT_BASE_URL: str = Field(
+        default="", 
+        env="ESPRIT_BASE_URL"
+    )
+    ESPRIT_MODEL: str = Field(
+        default="gpt-4", 
+        env="ESPRIT_MODEL"
+    )
+
+
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 
+print("📌 Chargement des variables d'environnement...")
 settings = Settings()
+print(f"settings :{settings}")

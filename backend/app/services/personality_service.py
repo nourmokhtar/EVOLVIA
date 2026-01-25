@@ -9,6 +9,10 @@ from langgraph.graph import StateGraph
 from langchain_ollama import OllamaLLM
 from opik import track, configure
 from datetime import datetime
+import httpx
+from langchain_openai import ChatOpenAI
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,9 +61,36 @@ class PersonalityService:
         self.ollama_base_url = settings.OLLAMA_BASE_URL
         self.ollama_model = settings.OLLAMA_MODEL
         self.use_ollama = settings.USE_OLLAMA_FOR_PERSONALITY
+
+        self.use_esprit = getattr(settings, 'USE_ESPRIT_FOR_PERSONALITY', False)
+        self.esprit_api_key = getattr(settings, 'ESPRIT_API_KEY', None)
+        self.esprit_base_url = getattr(settings, 'ESPRIT_BASE_URL', None)
+        self.esprit_model = getattr(settings, 'ESPRIT_MODEL', 'gpt-4')
+        
+
+
         self.llm = None
         self.graph = None
         
+        if self.use_esprit and self.esprit_api_key and self.esprit_base_url:
+            try:
+                # Create HTTP client with SSL verification disabled
+                http_client = httpx.Client(verify=False)
+                
+                self.llm = ChatOpenAI(
+                    api_key=self.esprit_api_key,
+                    base_url=self.esprit_base_url,
+                    model=self.esprit_model,
+                    temperature=0.7,
+                    http_client=http_client,
+                    timeout=180
+                )
+                self.graph = self._build_personality_graph()
+                logger.info(f"ESPRIT API initialized with model: {self.esprit_model}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize ESPRIT API: {e}")
+
+
         if self.use_ollama:
             try:
                 self.llm = OllamaLLM(
@@ -110,6 +141,11 @@ class PersonalityService:
             
             if self.llm:
                 analysis_text = self.llm.invoke(analysis_prompt)
+                print(f"Ollama raw response: {analysis_text}",file=os.sys.stdout,flush=True)
+                if hasattr(analysis_text, "content"):
+                    analysis_text = analysis_text.content
+                else:
+                    analysis_text = str(analysis_text)
                 logger.info(f"Ollama response: {analysis_text}")
                 state["analysis_text"] = analysis_text
                 state["model_used"] = self.ollama_model
@@ -176,9 +212,9 @@ class PersonalityService:
         LangGraph orchestrates the workflow, Opik tracks the execution for observability.
         Returns a dict with trait deltas and analysis feedback.
         """
-        if not self.use_ollama:
-            logger.warning("Ollama is disabled. Skipping personality analysis.")
-            return {"error": "Ollama is not enabled", "traits_delta": {}}
+        if not self.use_ollama and not self.use_esprit:
+            logger.warning("No LLM provider enabled. Skipping personality analysis.")
+            return {"error": "No LLM provider enabled", "traits_delta": {}}
         
         if not self.graph or not self.llm:
             logger.error("LangGraph or LLM not initialized")
@@ -262,6 +298,12 @@ Be concise and provide only the JSON response.
             # Try to extract JSON from the response
             # Look for content between { and }
             import re
+            print(f"Response text for parsing: {response_text}")
+            
+          
+
+            print(f"Response text for parsing: {response_text}")
+
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             
             if json_match:
@@ -280,7 +322,7 @@ Be concise and provide only the JSON response.
             logger.error(f"Error parsing trait scores: {str(e)}")
             return {trait: 0 for trait in self.PERSONALITY_TRAITS}
     
-    async def analyze_and_update_personality(
+    async def analyze_and_update_personality(          
         self, 
         db: Session, 
         user: User, 
