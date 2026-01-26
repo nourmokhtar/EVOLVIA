@@ -63,6 +63,7 @@ class LearnLLMService:
         last_checkpoint: Optional[str] = None,
         difficulty_level: int = 1,
         interruption_count: int = 0,
+        has_uploaded_file: bool = False,
     ) -> TeacherResponse:
         """
         Generate a structured teacher response.
@@ -80,6 +81,11 @@ class LearnLLMService:
             TeacherResponse with speech_text and board_actions
         """
 
+        # Check if question is covered in uploaded file
+        question_covered = False
+        if has_uploaded_file and lesson_context:
+            question_covered = self._check_question_coverage(student_input, lesson_context)
+        
         # Build the prompt
         prompt = self._build_prompt(
             lesson_context=lesson_context,
@@ -87,6 +93,8 @@ class LearnLLMService:
             last_checkpoint=last_checkpoint,
             difficulty_level=difficulty_level,
             interruption_count=interruption_count,
+            has_uploaded_file=has_uploaded_file,
+            question_covered=question_covered,
         )
 
         # Call LLM (mock for now - replace with real provider)
@@ -129,6 +137,8 @@ class LearnLLMService:
         last_checkpoint: Optional[str],
         difficulty_level: int,
         interruption_count: int,
+        has_uploaded_file: bool = False,
+        question_covered: bool = False,
     ) -> str:
         """
         Build the prompt for the LLM.
@@ -254,6 +264,13 @@ Lesson context (Background info - IGNORE LANGUAGE HERE):
 
 {checkpoint_text}
 
+{f"[IMPORTANT] The user has uploaded a course file. Use the content above to answer their question. "
+f"If the question is NOT covered in the uploaded file, answer from your general knowledge "
+f"but WARN the user: 'Note: This topic is not covered in your uploaded course file. "
+f"I'm answering from general knowledge.'" if has_uploaded_file and not question_covered and lesson_context else ""}
+{f"[IMPORTANT] The user's question IS covered in the uploaded course file. "
+f"Answer using the file content as the primary source." if has_uploaded_file and question_covered and lesson_context else ""}
+
 === CURRENT STUDENT INPUT (DETERMINES LANGUAGE) ===
 {student_input}
 ===================================================
@@ -266,6 +283,71 @@ SPEECH: ...
 """
         logger.info(f"Generated prompt: {prompt}")
         return prompt
+
+    def _check_question_coverage(self, question: str, file_content: str) -> bool:
+        """
+        Check if the question is covered in the uploaded file content.
+        
+        Uses simple keyword matching and semantic similarity heuristics.
+        Returns True if question appears to be covered, False otherwise.
+        """
+        if not question or not file_content:
+            return False
+        
+        # Normalize text for comparison
+        question_lower = question.lower()
+        file_content_lower = file_content.lower()
+        
+        # Extract key terms from question (remove common words)
+        common_words = {
+            'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+            'should', 'may', 'might', 'can', 'what', 'when', 'where', 'who',
+            'why', 'how', 'which', 'this', 'that', 'these', 'those', 'i', 'you',
+            'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them',
+            'le', 'la', 'les', 'un', 'une', 'des', 'de', 'du', 'et', 'ou',
+            'est', 'sont', 'était', 'étaient', 'être', 'avoir', 'a', 'as',
+            'qu', 'que', 'qui', 'quoi', 'comment', 'pourquoi', 'où', 'quand'
+        }
+        
+        # Extract meaningful words from question
+        question_words = set(word.lower() for word in question.split() 
+                           if len(word) > 3 and word.lower() not in common_words)
+        
+        if not question_words:
+            # If no meaningful words, check if question phrases appear
+            # Check for question patterns
+            question_phrases = [
+                phrase.strip() for phrase in question_lower.split('?')[0].split()
+                if len(phrase.strip()) > 2
+            ]
+            if question_phrases:
+                # Check if any significant phrase appears in file
+                for phrase in question_phrases[-3:]:  # Check last 3 words
+                    if phrase in file_content_lower and len(phrase) > 4:
+                        return True
+            return False
+        
+        # Count how many question words appear in file content
+        matches = sum(1 for word in question_words if word in file_content_lower)
+        coverage_ratio = matches / len(question_words) if question_words else 0
+        
+        # Consider covered if at least 30% of key terms match
+        # or if any key term appears multiple times (indicating relevance)
+        is_covered = coverage_ratio >= 0.3
+        
+        # Additional check: if question contains specific terms that appear in file
+        if not is_covered:
+            # Check for longer phrases (2-3 word combinations)
+            question_parts = question_lower.split()
+            for i in range(len(question_parts) - 1):
+                phrase = f"{question_parts[i]} {question_parts[i+1]}"
+                if phrase in file_content_lower and len(phrase) > 6:
+                    is_covered = True
+                    break
+        
+        logger.info(f"Question coverage check: {coverage_ratio:.2%} match, covered={is_covered}")
+        return is_covered
 
     def _detect_language(self, text: str) -> str:
         """

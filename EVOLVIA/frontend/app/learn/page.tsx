@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useSearchParams } from "next/navigation";
+import Image from "next/image";
 import {
   MessageSquare,
   Sparkles,
@@ -50,6 +51,12 @@ export default function LearnPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentTeacherTextRef = useRef("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const thinkingVideoRef = useRef<HTMLVideoElement>(null);
+  const talkingVideoRef = useRef<HTMLVideoElement>(null);
+  const [isMounted, setIsMounted] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [hasStarted, setHasStarted] = useState(false);
 
@@ -77,6 +84,11 @@ export default function LearnPage() {
   const isQuizOpenRef = useRef(false);
 
   const [voiceCount, setVoiceCount] = useState(0);
+
+  // Set mounted state to prevent hydration mismatches
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   useEffect(() => {
     const updateVoices = () => {
@@ -343,6 +355,53 @@ export default function LearnPage() {
     addSystemMessage("Resuming...");
   };
 
+  const handleUploadCourse = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !ws.sessionId) {
+      return;
+    }
+
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await fetch(
+        `${apiUrl}/api/v1/learn/session/${ws.sessionId}/upload-course`,
+        {
+          method: 'POST',
+          body: formData,
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Failed to upload file');
+      }
+
+      const result = await response.json();
+      setUploadedFileName(file.name);
+      addSystemMessage(result.message || `Course file "${file.name}" uploaded successfully!`, "info");
+    } catch (error) {
+      console.error('File upload error:', error);
+      addSystemMessage(
+        error instanceof Error ? error.message : 'Failed to upload course file',
+        "error"
+      );
+    } finally {
+      setIsUploading(false);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   useEffect(() => {
     if (tts.isPlaying) {
       setIsSpeaking(true);
@@ -350,6 +409,68 @@ export default function LearnPage() {
       setIsSpeaking(false);
     }
   }, [tts.isPlaying]);
+
+  // Control videos with priority: speaking > thinking > waiting
+  useEffect(() => {
+    if (!isMounted) return;
+
+    const thinkingVideo = thinkingVideoRef.current;
+    const talkingVideo = talkingVideoRef.current;
+
+    // Helper function to safely play video
+    const safePlay = (video: HTMLVideoElement | null, videoName: string) => {
+      if (!video) return;
+      
+      // Use requestAnimationFrame to ensure any pending operations complete
+      requestAnimationFrame(() => {
+        if (!video) return;
+        const playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((error) => {
+            // Ignore AbortError and NotAllowedError - they're expected in some cases
+            if (error.name !== 'AbortError' && error.name !== 'NotAllowedError') {
+              console.error(`Error playing ${videoName} video:`, error);
+            }
+          });
+        }
+      });
+    };
+
+    // Helper function to safely stop video
+    const safeStop = (video: HTMLVideoElement | null) => {
+      if (!video) return;
+      try {
+        video.pause();
+        video.currentTime = 0;
+      } catch (error) {
+        // Ignore errors when stopping
+      }
+    };
+
+    if (isSpeaking) {
+      // Priority 1: Speaking - stop thinking, play talking
+      safeStop(thinkingVideo);
+      if (talkingVideo) {
+        talkingVideo.loop = true;
+        talkingVideo.currentTime = 0;
+        safePlay(talkingVideo, 'talking');
+      }
+    } else if (isLoading) {
+      // Priority 2: Thinking - stop talking, play thinking
+      safeStop(talkingVideo);
+      if (thinkingVideo) {
+        thinkingVideo.currentTime = 0;
+        safePlay(thinkingVideo, 'thinking');
+      }
+    } else {
+      // Priority 3: Waiting - stop both videos
+      safeStop(thinkingVideo);
+      safeStop(talkingVideo);
+      if (talkingVideo) {
+        talkingVideo.loop = false;
+      }
+    }
+  }, [isLoading, isSpeaking, isMounted]);
 
   return (
     <div className="flex flex-col h-screen bg-background relative overflow-hidden">
@@ -374,13 +495,38 @@ export default function LearnPage() {
           </div>
         )}
 
-        <button
-          className="ml-auto px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors text-sm font-medium flex items-center gap-2"
-          title="Upload a new course"
-          suppressHydrationWarning
-        >
-          <span>+</span> Upload Course
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {uploadedFileName && (
+            <span className="text-xs text-muted-foreground px-2 py-1 bg-surface/50 rounded">
+              📄 {uploadedFileName}
+            </span>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx,.doc,.txt,.md"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+          <button
+            onClick={handleUploadCourse}
+            disabled={isUploading || !ws.sessionId}
+            className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors text-sm font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Upload a new course file (PDF, DOCX, TXT, MD)"
+            suppressHydrationWarning
+          >
+            {isUploading ? (
+              <>
+                <Loader className="w-4 h-4 animate-spin" />
+                Uploading...
+              </>
+            ) : (
+              <>
+                <span>+</span> Upload Course
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Main Content */}
@@ -598,14 +744,62 @@ export default function LearnPage() {
           <div className="flex-1 flex gap-4 p-4 overflow-hidden bg-gradient-to-br from-surface/30 to-background/50">
             <div className="w-1/2 flex flex-col transition-all duration-300 -ml-4">
               <div className="rounded-lg overflow-hidden shadow-2xl border border-white/10 bg-black/50 backdrop-blur-md relative w-full h-full flex items-center justify-center">
-                <iframe
-                  src="https://www.canva.com/design/DAG_c54c93M/bFOEXv357Hbui8v-D2dLTg/view?embed"
-                  title="Canva video player"
-                  className="h-full aspect-video max-w-none"
-                  allow="encrypted-media; autoplay; microphone; camera; display-capture"
-                  allowFullScreen
-                  id="canva-iframe"
-                ></iframe>
+                {isMounted ? (
+                  <>
+                    {/* Thinking video - plays once when loading (only if not speaking) */}
+                    <video
+                      ref={thinkingVideoRef}
+                      src="/avatars3/avatar-thinking.mp4"
+                      className={cn(
+                        "absolute inset-0 w-full h-full object-contain",
+                        isLoading && !isSpeaking ? "block" : "hidden"
+                      )}
+                      playsInline
+                      muted
+                      onEnded={() => {
+                        // Video plays once, then stops
+                        if (thinkingVideoRef.current) {
+                          thinkingVideoRef.current.pause();
+                        }
+                      }}
+                    />
+                    
+                    {/* Talking video - loops while speaking */}
+                    <video
+                      ref={talkingVideoRef}
+                      src="/avatars3/avatar-talking.mp4"
+                      className={cn(
+                        "absolute inset-0 w-full h-full object-contain",
+                        isSpeaking ? "block" : "hidden"
+                      )}
+                      playsInline
+                      muted
+                      loop
+                    />
+                    
+                    {/* Waiting image - shown when neither thinking nor speaking */}
+                    {!isLoading && !isSpeaking && (
+                      <Image
+                        src="/avatars3/avatar-waiting.png"
+                        alt="AI Teacher Avatar - Waiting"
+                        width={400}
+                        height={400}
+                        className="object-contain w-full h-full"
+                        priority
+                      />
+                    )}
+                  </>
+                ) : (
+                  /* Fallback during SSR - show waiting image */
+                  <Image
+                    src="/avatars3/avatar-waiting.png"
+                    alt="AI Teacher Avatar - Waiting"
+                    width={400}
+                    height={400}
+                    className="object-contain w-full h-full"
+                    priority
+                  />
+                )}
               </div>
             </div>
 
@@ -673,6 +867,7 @@ export default function LearnPage() {
                 <button
                   onClick={startLearning}
                   className="w-full py-4 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl font-bold text-lg transition-transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+                  suppressHydrationWarning
                 >
                   <Play className="w-6 h-6 fill-current" />
                   Start Session
@@ -684,6 +879,7 @@ export default function LearnPage() {
                     tts.speak("Checking audio system. One, two, three.");
                   }}
                   className="w-full py-3 bg-secondary hover:bg-secondary/80 text-secondary-foreground rounded-xl font-medium flex items-center justify-center gap-2"
+                  suppressHydrationWarning
                 >
                   <Volume2 className="w-5 h-5" />
                   Test Audio (Click me first)

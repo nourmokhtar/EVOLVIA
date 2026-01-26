@@ -7,7 +7,7 @@ Provides:
 - WS /learn/ws - WebSocket for bidirectional streaming (recommended)
 """
 
-from fastapi import APIRouter, WebSocket, Depends, HTTPException, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, Depends, HTTPException, WebSocketDisconnect, UploadFile, File, Form
 from typing import Optional
 import uuid
 import json
@@ -26,6 +26,7 @@ from app.schemas.learn import (
 )
 from app.services.learn_session import LearnSessionManager, LearnSession
 from app.services.learn_llm import LearnLLMService
+from app.services.file_extractor import file_extractor
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["learn"])
@@ -108,6 +109,52 @@ async def send_event(event: InboundEvent):
     except Exception as e:
         logger.error(f"Error handling event: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/learn/session/{session_id}/upload-course")
+async def upload_course_file(
+    session_id: str,
+    file: UploadFile = File(...),
+):
+    """
+    Upload a course file for a learning session.
+    
+    The file content will be extracted and used as context when answering questions.
+    If a question is not covered in the file, the system will answer from general knowledge
+    and warn the user.
+    """
+    logger.info(f"📁 Uploading course file for session {session_id}")
+    
+    # Validate session
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session = session_manager.get_session(session_id)
+    
+    # Read file content
+    file_content = await file.read()
+    
+    # Extract text from file
+    extracted_text = await file_extractor.extract_text(file_content, file.filename or "unknown")
+    
+    if not extracted_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to extract text from file. Supported formats: PDF, DOCX, TXT, MD"
+        )
+    
+    # Store in session
+    session.uploaded_file_content = extracted_text
+    session.uploaded_file_name = file.filename
+    
+    logger.info(f"✅ Course file uploaded and extracted ({len(extracted_text)} characters)")
+    
+    return {
+        "success": True,
+        "file_name": file.filename,
+        "content_length": len(extracted_text),
+        "message": "Course file uploaded successfully. The teacher will now use this content to answer your questions."
+    }
 
 
 # ============================================================================
@@ -231,14 +278,18 @@ async def _handle_event(
         session.wait_for_answer()
         
         # Generate teacher response
+        # Use uploaded file content as lesson context if available
+        lesson_context = session.uploaded_file_content or ""
+        
         response = await llm_service.generate_teacher_response(
             session_id=session.session_id,
             step_id=session.step_id,
-            lesson_context="",  # TODO: load from DB
+            lesson_context=lesson_context,
             student_input=event.text,
             last_checkpoint=session.checkpoint_summary,
             difficulty_level=session.difficulty_level,
             interruption_count=session.interruption_count,
+            has_uploaded_file=bool(session.uploaded_file_content),
         )
         
         session.continue_teaching()
@@ -342,14 +393,18 @@ async def _handle_websocket_event(
                     student_input = f"[INTERRUPTION - new question] {student_input}"
             
             # Generate teacher response
+            # Use uploaded file content as lesson context if available
+            lesson_context = session.uploaded_file_content or ""
+            
             response = await llm_service.generate_teacher_response(
                 session_id=session.session_id,
                 step_id=session.step_id,
-                lesson_context="",  # TODO: load from DB
+                lesson_context=lesson_context,
                 student_input=student_input,
                 last_checkpoint=session.checkpoint_summary,
                 difficulty_level=session.difficulty_level,
                 interruption_count=session.interruption_count,
+                has_uploaded_file=bool(session.uploaded_file_content),
             )
             
             # Stream speech as deltas (simulate streaming)

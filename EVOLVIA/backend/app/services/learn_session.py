@@ -54,6 +54,10 @@ class LearnSession:
         self.exam_question_count: int = 0
         self.exam_results: List[bool] = []
         
+        # Uploaded course file content
+        self.uploaded_file_content: Optional[str] = None
+        self.uploaded_file_name: Optional[str] = None
+        
         # Metadata for observability
         self.created_at: datetime = datetime.utcnow()
         self.last_activity: datetime = datetime.utcnow()
