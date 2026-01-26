@@ -1,0 +1,160 @@
+{
+  "formatVersion": "1.0.0",
+  "generator": "Placeholder VRM Teacher Avatar",
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Teacher Avatar",
+      "nodes": [0]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Teacher_Armature",
+      "children": [1, 2, 3, 4, 5],
+      "translation": [0, 0, 0]
+    },
+    {
+      "name": "Head",
+      "mesh": 0,
+      "translation": [0, 1.5, 0]
+    },
+    {
+      "name": "Body",
+      "mesh": 1,
+      "translation": [0, 0.8, 0]
+    },
+    {
+      "name": "LeftArm",
+      "mesh": 2,
+      "translation": [-0.5, 1.2, 0]
+    },
+    {
+      "name": "RightArm",
+      "mesh": 3,
+      "translation": [0.5, 1.2, 0]
+    },
+    {
+      "name": "Legs",
+      "mesh": 4,
+      "translation": [0, 0, 0]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Head_Mesh",
+      "primitives": [
+        {
+          "attributes": {"POSITION": 0, "NORMAL": 1},
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "Body_Mesh",
+      "primitives": [
+        {
+          "attributes": {"POSITION": 3, "NORMAL": 4},
+          "indices": 5,
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "LeftArm_Mesh",
+      "primitives": [
+        {
+          "attributes": {"POSITION": 6, "NORMAL": 7},
+          "indices": 8,
+          "material": 2
+        }
+      ]
+    },
+    {
+      "name": "RightArm_Mesh",
+      "primitives": [
+        {
+          "attributes": {"POSITION": 9, "NORMAL": 10},
+          "indices": 11,
+          "material": 2
+        }
+      ]
+    },
+    {
+      "name": "Legs_Mesh",
+      "primitives": [
+        {
+          "attributes": {"POSITION": 12, "NORMAL": 13},
+          "indices": 14,
+          "material": 3
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "Head_Material",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.7, 0.8, 0.9, 1.0],
+        "metallicFactor": 0.2,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Body_Material",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.6, 0.7, 0.85, 1.0],
+        "metallicFactor": 0.3,
+        "roughnessFactor": 0.5
+      }
+    },
+    {
+      "name": "Arm_Material",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.65, 0.75, 0.88, 1.0],
+        "metallicFactor": 0.2,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Leg_Material",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.5, 0.6, 0.75, 1.0],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.7
+      }
+    }
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 0, "type": "VEC3"},
+    {"bufferView": 1, "componentType": 5126, "count": 0, "type": "VEC3"},
+    {"bufferView": 2, "componentType": 5125, "count": 0, "type": "SCALAR"},
+    {"bufferView": 3, "componentType": 5126, "count": 0, "type": "VEC3"},
+    {"bufferView": 4, "componentType": 5126, "count": 0, "type": "VEC3"},
+    {"bufferView": 5, "componentType": 5125, "count": 0, "type": "SCALAR"},
+    {"bufferView": 6, "componentType": 5126, "count": 0, "type": "VEC3"},
+    {"bufferView": 7, "componentType": 5126, "count": 0, "type": "VEC3"},
+    {"bufferView": 8, "componentType": 5125, "count": 0, "type": "SCALAR"},
+    {"bufferView": 9, "componentType": 5126, "count": 0, "type": "VEC3"},
+    {"bufferView": 10, "componentType": 5126, "count": 0, "type": "VEC3"},
+    {"bufferView": 11, "componentType": 5125, "count": 0, "type": "SCALAR"},
+    {"bufferView": 12, "componentType": 5126, "count": 0, "type": "VEC3"},
+    {"bufferView": 13, "componentType": 5126, "count": 0, "type": "VEC3"},
+    {"bufferView": 14, "componentType": 5125, "count": 0, "type": "SCALAR"}
+  ],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteStride": 12},
+    {"buffer": 0, "byteOffset": 0, "byteStride": 12},
+    {"buffer": 0, "byteOffset": 0}
+  ],
+  "buffers": [
+    {"byteLength": 0}
+  ],
+  "extensions": {
+    "VRM": {
+      "exporterVersion": "0.0.1",
+      "specVersion": "0.0.1"
+    }
+  }
+}
