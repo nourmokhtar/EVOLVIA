@@ -18,6 +18,7 @@ import {
     BrainCircuit
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { API } from '@/lib/api';
 
 export default function PracticePage() {
     const [activeSimulator, setActiveSimulator] = useState<'pitch' | 'collaboration' | null>(null);
@@ -195,7 +196,7 @@ function PitchSimulator({ onBack }: { onBack: () => void }) {
 
     const sendToAI = async (videoFrame: string, audio: string) => {
         try {
-            const response = await fetch('http://localhost:8000/api/v1/pitch/analyze', {
+            const response = await fetch(API.pitch.analyze, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

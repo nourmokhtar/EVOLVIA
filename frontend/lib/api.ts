@@ -19,4 +19,8 @@ export const API = {
     chat: `${API_URL}/api/v1/ai_teacher/chat`,
     feedback: `${API_URL}/api/v1/ai_teacher/feedback`,
   },
+  pitch: {
+    analyze: `${API_URL}/api/v1/pitch/analyze`,
+    history: `${API_URL}/api/v1/pitch/history`,
+  },
 };
