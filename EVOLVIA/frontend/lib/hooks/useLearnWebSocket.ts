@@ -19,6 +19,7 @@ export type InboundEvent =
   | UserMessageEvent
   | InterruptEvent
   | ResumeEvent
+  | ChangeDifficultyEvent
   | StatusEvent;
 
 export type OutboundEvent =
@@ -63,6 +64,12 @@ export interface StatusEvent {
   status: "idle" | "teaching" | "paused" | "answering" | "resuming" | "IDLE" | "TEACHING" | "PAUSED" | "ANSWERING" | "RESUMING"; // Allow both cases from backend
   difficulty_level?: number;
   difficulty_title?: string;
+}
+
+export interface ChangeDifficultyEvent {
+  type: "CHANGE_DIFFICULTY";
+  session_id: string;
+  level: number;
 }
 
 // Outbound events from teacher
@@ -116,6 +123,8 @@ export interface WebSocketState {
   boardActions: BoardAction[];
   error: string | null;
   isReconnecting: boolean;
+  difficultyLevel: number;
+  difficultyTitle: string;
 }
 
 export interface UseWebSocketOptions {
@@ -165,6 +174,8 @@ export function useLearnWebSocket(
     boardActions: [],
     error: null,
     isReconnecting: false,
+    difficultyLevel: 1,
+    difficultyTitle: "Beginner",
   });
 
   // Refs
@@ -301,6 +312,8 @@ export function useLearnWebSocket(
           setState((prev) => ({
             ...prev,
             status: statusEvent.status.toLowerCase() as any, // mapping to internal lower case types
+            difficultyLevel: statusEvent.difficulty_level || prev.difficultyLevel,
+            difficultyTitle: statusEvent.difficulty_title || prev.difficultyTitle,
           }));
           emit("status", data);
           break;

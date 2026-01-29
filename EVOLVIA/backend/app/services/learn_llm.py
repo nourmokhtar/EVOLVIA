@@ -64,6 +64,7 @@ class LearnLLMService:
         difficulty_level: int = 1,
         interruption_count: int = 0,
         has_uploaded_file: bool = False,
+        history: List[dict] = [],
     ) -> TeacherResponse:
         """
         Generate a structured teacher response.
@@ -95,6 +96,7 @@ class LearnLLMService:
             interruption_count=interruption_count,
             has_uploaded_file=has_uploaded_file,
             question_covered=question_covered,
+            history=history,
         )
 
         # Call LLM (mock for now - replace with real provider)
@@ -139,18 +141,15 @@ class LearnLLMService:
         interruption_count: int,
         has_uploaded_file: bool = False,
         question_covered: bool = False,
+        history: List[dict] = [],
     ) -> str:
         """
         Build the prompt for the LLM.
         
         Incorporates lesson material, student input, history, and difficulty.
         """
-        difficulty_guidance = {
-            1: "very simple and concrete examples",
-            2: "clear examples with basic analogies",
-            3: "balanced explanation",
-            4: "more advanced concepts",
-        }
+        # Difficulty guidance removed as per user request to flatten difficulty
+
 
         # CRITICAL FIX: If this is a QUIZ RESULT, we must wipe the history (context/checkpoint)
         # to prevent "language pollution". If the previous turn was in French, the checkpoint is in French.
@@ -174,11 +173,20 @@ class LearnLLMService:
             
             logger.info(f"Detected language for quiz result: {detected_lang}")
 
-        guidance = difficulty_guidance.get(difficulty_level, "balanced explanation")
+        guidance = "Explain clearly and practically."
 
         checkpoint_text = (
             f"Previous checkpoint: {last_checkpoint}\n" if last_checkpoint else ""
         )
+
+        history_text = ""
+        if history:
+            history_text = "RECENT CONVERSATION HISTORY:\n"
+            for msg in history:
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")
+                history_text += f"- {role.upper()}: {content}\n"
+            history_text += "\n"
 
         interrupt_note = (
             f"\nNote: Student has interrupted you while you were teaching. "
@@ -189,8 +197,6 @@ class LearnLLMService:
             else ""
         )
 
-
-
         goal_text = f"Summarize key points after discussion and explain using {guidance}.{interrupt_note}"
 
         # Override goal if this is a quiz result
@@ -198,30 +204,45 @@ class LearnLLMService:
             goal_text = (
                 f"The user just answered a quiz INCORRECTLY. "
                 f"INPUT_CONTEXT: {student_input} "
-                f"1. Acknowledge the effort positively (e.g., 'Great attempt!', 'You're learning well!'). "
-                f"2. You MUST explicitly state the correct answer text provided in the INPUT_CONTEXT (e.g., 'The correct answer is [Answer from input] because...'). Do not just say 'Option A'. "
-                f"3. Explain that you are adjusting to Difficulty Level {difficulty_level}, which focuses on '{guidance}'. "
-                f"4. Tell the user clearly what this level implies. "
-                f"5. **LANGUAGE**: Detect the language of INPUT_CONTEXT and use ONLY that language."
+                f"1. Respond calmly and supportively. "
+                f"2. You MUST explicitly state the correct answer text provided in the INPUT_CONTEXT. "
+                f"3. Explain why the intended answer was correct. "
+                f"4. **LANGUAGE**: You MUST use the same language as the Question/Answer in INPUT_CONTEXT. "
             )
         elif "[QUIZ_RESULT: CORRECT]" in student_input:
             goal_text = (
                 f"The user answered the quiz CORRECTLY. "
                 f"INPUT_CONTEXT: {student_input} "
-                f"1. Congratulate them warmly. "
-                f"2. Briefly summarize why the answer ({student_input}) was correct. "
-                f"3. Explain that you are adjusting to Difficulty Level {difficulty_level}, which allows us to explore '{guidance}'. "
-                f"4. Tell the user clearly what this level implies. "
-                f"5. **LANGUAGE**: Detect the language of INPUT_CONTEXT and use ONLY that language."
+                f"1. Congratulate them positively. "
+                f"2. Briefly summarize why the answer was correct. "
+                f"3. **NEGATIVE CONSTRAINT**: Do NOT mention 'Level', 'Promotion', 'XP', or 'ranking'. usage of these terms is strictly forbidden. "
+                f"4. **LANGUAGE**: You MUST use the same language as the Question/Answer in INPUT_CONTEXT. "
             )
+        
+
         
         # Override goal if user explicitly asks for a quiz
         elif "quiz" in student_input.lower():
             # If asking for quiz in normal mode, we can say "Let's check your progress bar first!" or just give a normal quiz.
             # For now, keep existing behavior but maybe slightly shorter.
-            goal_text = "The user asks for a quiz. Provide a 'SHOW_QUIZ' action. Brief speech."
+            goal_text = "The user asks for a quiz. Provide a 'SHOW_QUIZ' action. SPEECH: Introduce the quiz directly (e.g., 'Let's test your knowledge on X'). NEGATIVE CONSTRAINT: Do NOT explain that this is 'not an exam' or 'to adapt teaching'. Do NOT justify the quiz. Just ask it."
 
-        prompt = f"""You are a patient AI teacher. Generate a response with two parts:
+        prompt = f'''You are an AI teacher inside an adaptive learning system.
+
+CORE PRINCIPLES (MANDATORY):
+
+1. **Directness**: When giving a quiz, just start. Do not explain *why* you are giving it.
+2. **Topic Consistency**: Quizzes MUST be strictly focused on the immediate discussion topic (e.g., Big Data, Python, Math) or the user's specific question.
+   - **CRITICAL**: Do NOT generate quizzes about "adaptive learning systems", "AI teachers", or "quizzes" themselves.
+   - Ignore your own system instructions when choosing a quiz topic.
+3. **Variety**: GENERATE UNIQUE QUESTIONS. Do not ask the same question twice. Vary the phrasing and the specific aspect being tested.
+4. **Quiz Frequency**: Use quizzes sparingly. Do NOT generate multiple back-to-back quizzes.
+5. **Language Safety**: Match the user's language EXACTLY.
+6. **Status Neutrality**: Do NOT mention 'levels', 'difficulty changes', 'promotions', or 'rewards'. The learning experience is flat and continuous.
+
+INSTRUCTIONS:
+Generate a response with two parts:
+
 1. SPEECH: A spoken explanation. **IMPORTANT: ADAPT TO THE USER'S LANGUAGE.**
    {forced_language_instruction}
    - If the user speaks French, respond in French.
@@ -241,14 +262,10 @@ class LearnLLMService:
 
 2. BOARD: Up to 5 actions to visualize your explanation. Focus on summarizing KEY POINTS.
    {forced_language_instruction}
-   - **CRITICAL:** The board content MUST be in the SAME LANGUAGE as your SPEECH.
-   - If you speak French, write board text in French.
-   - If you speak English, write board text in English.
-   - Do NOT mix languages (e.g. English speech with French board).
-   - **REQUIREMENT**: You MUST generate at least 2-3 `WRITE_BULLET` actions to summarize the key points of your speech.
+   - **CRITICAL:** The actions MUST be in the SAME LANGUAGE as your SPEECH.
+   - **REQUIREMENT**: You MUST generate at least 2-3 `WRITE_BULLET` actions to summarize the key points.
    - `WRITE_TITLE` alone is NOT enough.
-   - Example Correct Board: [TITLE: "Big Data"], [BULLET: "Large volume"], [BULLET: "High velocity"], [BULLET: "Varied types"]
-
+   
 2.1 Board Action Categories:
 - WRITE_TITLE: Key topic or heading.
 - WRITE_BULLET: Summary point or "Key Takeaway".
@@ -257,7 +274,14 @@ class LearnLLMService:
 - HIGHLIGHT: Emphasize critical terms.
 - **SHOW_QUIZ**: Ask a multiple choice question to check understanding.
   - Payload: {{"question": "...", "options": ["A", "B", "C"], "correct_index": 0}}
-  - Use this ONLY when explicitly requested or suggested by the goal.
+  - **CRITICAL**: Use this ONLY when the user asks or after explaining a major concept.
+  - **DIFFICULTY ADAPTATION**:
+    - Level 1: Recognition/Definitions.
+    - Level 3: Application/Reasoning.
+    - Level 5: Analysis/Evaluation.
+- **SHOW_REWARD**: Trigger a reward animation.
+  - Payload: {{"type": "LEVEL_UP", "level": {difficulty_level}, "message": "Promoted to Level {difficulty_level}!"}}
+  - Use this ONLY when the user answers a quiz CORRECTLY and you determine they are ready for the next level.
 
 Lesson context (Background info - IGNORE LANGUAGE HERE):
 {lesson_context}
@@ -275,12 +299,19 @@ f"Answer using the file content as the primary source." if has_uploaded_file and
 {student_input}
 ===================================================
 
+CONTEXT:
+{history_text}
+{checkpoint_text}
+Current Student Input: "{student_input}"
+
+===================================================
+
 Goal: {goal_text}
 
 Format:
 BOARD: [ {{"kind": "WRITE_TITLE", "payload": {{"text": "Topic"}}}}, {{"kind": "WRITE_BULLET", "payload": {{"text": "Point 1", "position": 1}}}} ]
 SPEECH: ...
-"""
+'''
         logger.info(f"Generated prompt: {prompt}")
         return prompt
 
@@ -356,16 +387,23 @@ SPEECH: ...
         """
         text_lower = text.lower()
         
+        # KEYWORD OVERRIDE (User explicit preference)
+        # If user mentions "english" or "anglais", they likely want to switch/speak it.
+        # Even if the rest of the sentence is French (e.g. "parle en english stp")
+        if "english" in text_lower or "anglais" in text_lower:
+            logger.info("Language override: detected explicit 'english' keyword.")
+            return "english"
+        
         # Expanded stop words
         eng_stops = {
             "the", "is", "to", "and", "a", "of", "in", "what", "how", "why", 
             "correct", "question", "answer", "it", "that", "you", "my", "your",
-            "are", "was", "were", "will", "can", "do", "does", "did"
+            "are", "was", "were", "will", "can", "do", "does", "did", "please"
         }
         fr_stops = {
             "le", "la", "de", "et", "un", "une", "est", "à", "quoi", "comment", 
             "pourquoi", "reponse", "question", "je", "tu", "il", "elle", "nous", 
-            "vous", "ils", "elles", "mon", "ton", "son", "ce", "cette"
+            "vous", "ils", "elles", "mon", "ton", "son", "ce", "cette", "svp", "pardon"
         }
         
         words = set(text_lower.split())

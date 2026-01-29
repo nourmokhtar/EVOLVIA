@@ -23,6 +23,7 @@ class InboundEventType(str, Enum):
     USER_MESSAGE = "USER_MESSAGE"
     INTERRUPT = "INTERRUPT"
     RESUME = "RESUME"
+    CHANGE_DIFFICULTY = "CHANGE_DIFFICULTY"
 
 
 class OutboundEventType(str, Enum):
@@ -60,6 +61,7 @@ class BoardActionKind(str, Enum):
     DRAW_DIAGRAM = "DRAW_DIAGRAM"
     SHOW_IMAGE = "SHOW_IMAGE"
     SHOW_QUIZ = "SHOW_QUIZ"
+    SHOW_REWARD = "SHOW_REWARD"
 
 
 # ============================================================================
@@ -75,7 +77,8 @@ class StartLessonEvent(InboundEventBase):
     """Start a new learning session"""
     type: Literal[InboundEventType.START_LESSON] = InboundEventType.START_LESSON
     lesson_id: str
-    user_id: Optional[UUID] = None
+    user_id: Optional[str] = None
+    initial_difficulty: Optional[int] = Field(default=1, ge=1, le=5, description="Starting difficulty level (1-5)")
 
 
 class UserMessageEvent(InboundEventBase):
@@ -95,6 +98,14 @@ class InterruptEvent(InboundEventBase):
     step_id: Optional[int] = None
 
 
+
+class ChangeDifficultyEvent(InboundEventBase):
+    """Manually change the difficulty level"""
+    type: Literal[InboundEventType.CHANGE_DIFFICULTY] = InboundEventType.CHANGE_DIFFICULTY
+    session_id: str
+    level: int  # 1-5
+
+
 class ResumeEvent(InboundEventBase):
     """Resume teaching after interrupt/pause"""
     type: Literal[InboundEventType.RESUME] = InboundEventType.RESUME
@@ -103,7 +114,7 @@ class ResumeEvent(InboundEventBase):
 
 
 # Union type for all inbound events
-InboundEvent = Union[StartLessonEvent, UserMessageEvent, InterruptEvent, ResumeEvent]
+InboundEvent = Union[StartLessonEvent, UserMessageEvent, InterruptEvent, ResumeEvent, ChangeDifficultyEvent]
 
 
 # ============================================================================
@@ -188,7 +199,7 @@ class SessionMetadata(BaseModel):
     step_id: int
     interruption_count: int = 0
     difficulty_level: int = 1  # 1-5 scale, drops on repeated "ma fhemtch"
-    user_id: Optional[UUID] = None
+    user_id: Optional[str] = None
     lesson_id: Optional[str] = None
     checkpoint_summary: Optional[str] = None
 

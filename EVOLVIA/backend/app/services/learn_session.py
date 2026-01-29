@@ -28,11 +28,13 @@ class LearnSession:
     - ANSWERING → TEACHING (student responds)
     """
 
+
     def __init__(
         self,
         session_id: str,
         lesson_id: str,
         user_id: Optional[str] = None,
+        initial_difficulty: int = 1,
     ):
         self.session_id = session_id
         self.lesson_id = lesson_id
@@ -44,7 +46,10 @@ class LearnSession:
         
         # Learning context
         self.interruption_count: int = 0
-        self.difficulty_level: int = 1  # 1-5; decreases on repeated confusion
+        self.difficulty_level: int = initial_difficulty  # 1-5
+        
+
+
         self.checkpoint_summary: Optional[str] = None
         self.checkpoints: List[CheckpointEvent] = []
         
@@ -53,6 +58,9 @@ class LearnSession:
         self.is_exam_mode: bool = False
         self.exam_question_count: int = 0
         self.exam_results: List[bool] = []
+        
+        # Conversation History (Last 10 turns)
+        self.history: List[dict] = []  # [{"role": "user"|"assistant", "content": "..."}]
         
         # Uploaded course file content
         self.uploaded_file_content: Optional[str] = None
@@ -96,15 +104,18 @@ class LearnSession:
                 self.difficulty_level -= 1
 
     def handle_quiz_result(self, correct: bool) -> None:
-        """Adjust difficulty based on quiz performance"""
-        if correct:
-            # Boost difficulty if correct (up to max 5)
-            if self.difficulty_level < 5:
-                self.difficulty_level += 1
-        else:
-            # Lower difficulty if wrong (down to min 1)
-            if self.difficulty_level > 1:
-                self.difficulty_level -= 1
+        """
+        Handle quiz result.
+        Note: specific difficulty adjustment logic has been disabled as per requirements.
+        """
+        pass
+
+    def set_difficulty(self, level: int) -> None:
+        """Manually set difficulty level"""
+        if 1 <= level <= 5:
+            self.difficulty_level = level
+
+
 
     def resume(self) -> None:
         """Resume teaching after pause"""
@@ -150,6 +161,12 @@ class LearnSession:
             lesson_id=self.lesson_id,
             checkpoint_summary=self.checkpoint_summary,
         )
+
+    def add_history(self, role: str, content: str) -> None:
+        """Add a message to history, keeping only last 10 items"""
+        self.history.append({"role": role, "content": content})
+        if len(self.history) > 10:
+            self.history.pop(0)
 
     def update_activity(self) -> None:
         """Update last activity timestamp"""

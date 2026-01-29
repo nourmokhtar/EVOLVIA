@@ -16,6 +16,12 @@ import {
   VolumeX,
 } from "lucide-react";
 import { QuizModal } from "../components/learn/QuizModal";
+import { LevelUpPopup } from "../components/learn/LevelUpPopup";
+import { SourceSidebar } from "../components/learn/SourceSidebar";
+import { StudioSidebar } from "../components/learn/StudioSidebar";
+import { VirtualBoard } from "../components/learn/VirtualBoard";
+
+
 import { cn } from "@/lib/utils";
 import useLearnWebSocket, {
   TeacherTextFinalEvent,
@@ -82,6 +88,10 @@ export default function LearnPage() {
   const [quizPayload, setQuizPayload] = useState<any>(null);
   const [isQuizOpen, setIsQuizOpen] = useState(false);
   const isQuizOpenRef = useRef(false);
+
+  // Level Up State
+  const [showLevelUp, setShowLevelUp] = useState(false);
+  const [levelUpAmount, setLevelUpAmount] = useState(1);
 
   const [voiceCount, setVoiceCount] = useState(0);
 
@@ -179,6 +189,12 @@ export default function LearnPage() {
       if (event.action.kind === "SHOW_QUIZ") {
         setQuizPayload(event.action.payload);
         setIsQuizOpen(true);
+      } else if (event.action.kind === "SHOW_REWARD") {
+        console.log("REWARD ACTION RECEIVED:", event.action.payload);
+        if (event.action.payload?.type === "LEVEL_UP") {
+          setLevelUpAmount(event.action.payload.level || currentLevel + 1);
+          setShowLevelUp(true);
+        }
       } else {
         console.log("Realtime board action:", event.action);
         setBoardActions((prev) => {
@@ -292,17 +308,22 @@ export default function LearnPage() {
     scrollToBottom();
   };
 
-  const handleSendMessage = async () => {
-    if (!input.trim() || !ws.sessionId) return;
+  const handleSendMessage = async (textOverride?: string) => {
+    const textToSend = typeof textOverride === 'string' ? textOverride : input;
+
+    if (!textToSend.trim() || !ws.sessionId) return;
 
     const userMessage: Message = {
       role: "user",
-      text: input,
+      text: textToSend,
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, userMessage]);
-    const messageText = input;
-    setInput("");
+
+    // Only clear input if we sent what was in the input box
+    if (!textOverride) {
+      setInput("");
+    }
 
     // Check if we're interrupting before setting loading state
     const wasInterrupting = isPaused || isSpeaking || tts.isPlaying || isLoading;
@@ -328,7 +349,7 @@ export default function LearnPage() {
       setIsPaused(false);
     }
 
-    const success = ws.sendUserMessage(messageText, isActuallyInterruption);
+    const success = ws.sendUserMessage(textToSend, isActuallyInterruption);
     if (!success) {
       addSystemMessage("Failed to send message", "error");
       setIsLoading(false);
@@ -355,15 +376,16 @@ export default function LearnPage() {
     addSystemMessage("Resuming...");
   };
 
-  const handleUploadCourse = () => {
-    fileInputRef.current?.click();
+  const togglePause = () => {
+    if (isPaused) {
+      handleResume();
+    } else {
+      handleInterrupt();
+    }
   };
 
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file || !ws.sessionId) {
-      return;
-    }
+  const uploadFile = async (file: File) => {
+    if (!ws.sessionId) return;
 
     setIsUploading(true);
     const formData = new FormData();
@@ -395,10 +417,21 @@ export default function LearnPage() {
       );
     } finally {
       setIsUploading(false);
-      // Reset file input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+    }
+  };
+
+  const handleUploadCourse = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      await uploadFile(file);
+    }
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -420,7 +453,7 @@ export default function LearnPage() {
     // Helper function to safely play video
     const safePlay = (video: HTMLVideoElement | null, videoName: string) => {
       if (!video) return;
-      
+
       // Use requestAnimationFrame to ensure any pending operations complete
       requestAnimationFrame(() => {
         if (!video) return;
@@ -475,61 +508,33 @@ export default function LearnPage() {
   return (
     <div className="flex flex-col h-screen bg-background relative overflow-hidden">
       {/* Top: Course Upload Bar */}
-      <div className="border-b border-border bg-surface/50 px-4 py-3 flex items-center gap-4">
-        <h1 className="text-lg font-bold">Evolvia Learning</h1>
-
-        {/* Level Badge */}
-        {hasStarted && (
-          <div className="flex items-center gap-2 animate-fadeIn">
-            <div className={cn(
-              "px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-2 transition-all",
-              currentLevel === 1 ? "bg-blue-500/10 border-blue-500/20 text-blue-500" :
-                currentLevel === 2 ? "bg-green-500/10 border-green-500/20 text-green-500" :
-                  currentLevel === 3 ? "bg-yellow-500/10 border-yellow-500/20 text-yellow-500" :
-                    currentLevel >= 4 ? "bg-purple-500/10 border-purple-500/20 text-purple-500" :
-                      "bg-muted/50 text-muted-foreground"
-            )}>
-              <Sparkles className="w-3 h-3" />
-              <span>Level {currentLevel}: {currentLevelTitle}</span>
-            </div>
+      {/* Header - Minimalist */}
+      <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-surface/50 backdrop-blur-md">
+        <h1 className="font-bold text-xl flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center text-white">
+            <Sparkles className="w-5 h-5" />
           </div>
-        )}
-
-        <div className="ml-auto flex items-center gap-2">
-          {uploadedFileName && (
-            <span className="text-xs text-muted-foreground px-2 py-1 bg-surface/50 rounded">
-              📄 {uploadedFileName}
-            </span>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf,.docx,.doc,.txt,.md"
-            onChange={handleFileChange}
-            className="hidden"
-          />
-          <button
-            onClick={handleUploadCourse}
-            disabled={isUploading || !ws.sessionId}
-            className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors text-sm font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Upload a new course file (PDF, DOCX, TXT, MD)"
-            suppressHydrationWarning
-          >
-            {isUploading ? (
-              <>
-                <Loader className="w-4 h-4 animate-spin" />
-                Uploading...
-              </>
-            ) : (
-              <>
-                <span>+</span> Upload Course
-              </>
-            )}
-          </button>
+          Evolvia Notebook
+        </h1>
+        <div className="flex items-center gap-4">
+          <div className="text-xs font-mono bg-primary/10 text-primary px-2 py-1 rounded">
+            {ws.connected ? "Connected" : "Disconnected"}
+          </div>
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-cyan-400 border-2 border-surface shadow-sm"></div>
         </div>
       </div>
 
+      {/* Hidden File Input for Sidebar */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.docx,.doc,.txt,.md"
+        onChange={handleFileChange}
+        className="hidden"
+      />
+
       {/* Main Content */}
+
       <QuizModal
         isOpen={isQuizOpen}
         payload={quizPayload}
@@ -554,42 +559,89 @@ export default function LearnPage() {
 
           ws.sendUserMessage(resultMsg);
         }}
+        currentLevel={currentLevel}
       />
-      <div className="h-[calc(100vh-160px)] flex gap-4 overflow-hidden p-4">
-        <div
-          className={cn(
-            "glass-card flex flex-col transition-all duration-300 overflow-hidden rounded-lg border border-border",
-            chatOpen ? "flex-1" : "w-12"
-          )}
-        >
-          <div className="p-4 border-b border-border flex items-center justify-between bg-surface/50">
-            {chatOpen && (
-              <h3 className="font-bold flex items-center gap-2 text-sm">
-                <Sparkles className="w-4 h-4 text-primary" />
-                Virtual Teacher
-                {ws.status && <span className="text-xs text-muted-foreground">({ws.status})</span>}
-              </h3>
-            )}
-            <button
-              onClick={() => setChatOpen(!chatOpen)}
-              className="p-1 hover:bg-white/10 rounded-lg"
-              suppressHydrationWarning
-            >
-              {chatOpen ? (
-                <ChevronLeft className="w-5 h-5" />
-              ) : (
-                <MessageSquare className="w-5 h-5" />
-              )}
-            </button>
+      <LevelUpPopup
+        isVisible={showLevelUp}
+        level={levelUpAmount}
+        onClose={() => setShowLevelUp(false)}
+      />
+      {/* Main Content Area */}
+      <div className="flex-1 min-h-0 container mx-auto p-4 md:p-6 lg:p-8 max-w-[1800px]">
+        {/* 3-Column Layout */}
+        <div className="grid grid-cols-12 gap-6 h-full">
+
+          {/* LEFT COLUMN: Sources (20%) */}
+          <div className="col-span-12 lg:col-span-3 h-full overflow-hidden">
+            <SourceSidebar
+              uploadedFileName={uploadedFileName}
+              onUpload={uploadFile}
+              onRemove={() => setUploadedFileName(null)}
+              isUploading={isUploading}
+            />
           </div>
 
-          {chatOpen && (
-            <>
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {messages.length === 0 && !isLoading && (
-                  <div className="text-center text-muted-foreground text-sm pt-8">
-                    <Sparkles className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                    <p>Initializing teacher...</p>
+          {/* CENTER COLUMN: Discussion (60%) */}
+          <div className="col-span-12 lg:col-span-6 h-full flex flex-col gap-6 overflow-hidden">
+
+            {/* Avatar & Board Section (Top) */}
+            <div className="h-[40%] flex gap-4 min-h-0">
+              {/* Avatar - Vertical / Phone Aspect */}
+              <div className="relative w-[30%] max-w-[300px] text-center glass-card rounded-2xl overflow-hidden border border-border shadow-2xl">
+                <div className="absolute inset-0 flex items-center justify-center bg-black">
+                  {isMounted ? (
+                    <>
+                      <video
+                        ref={thinkingVideoRef}
+                        src="/avatars3/avatar-thinking.mp4"
+                        className={cn(
+                          "absolute inset-0 w-full h-full object-cover",
+                          isLoading && !isSpeaking ? "block" : "hidden"
+                        )}
+                        playsInline
+                        muted
+                        onEnded={() => thinkingVideoRef.current?.pause()}
+                      />
+                      <video
+                        ref={talkingVideoRef}
+                        src="/avatars3/avatar-talking.mp4"
+                        className={cn(
+                          "absolute inset-0 w-full h-full object-cover",
+                          isSpeaking ? "block" : "hidden"
+                        )}
+                        playsInline
+                        muted
+                        loop
+                      />
+                      {!isLoading && !isSpeaking && (
+                        <Image
+                          src="/avatars3/avatar-waiting.png"
+                          alt="AI Teacher"
+                          width={400}
+                          height={711}
+                          className="object-cover w-full h-full"
+                          priority
+                        />
+                      )}
+                    </>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* Virtual Board - Takes remaining width */}
+              <div className="flex-1 min-w-0">
+                <VirtualBoard actions={boardActions} className="h-full w-full" />
+              </div>
+            </div>
+
+            {/* Chat Section (Bottom) */}
+            <div className="flex-1 flex flex-col glass-card border border-border rounded-lg overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-primary/20 scrollbar-track-transparent">
+                {messages.length === 0 && (
+                  <div className="h-full flex flex-col items-center justify-center text-center p-8 opacity-50">
+                    <MessageSquare className="w-12 h-12 mb-4" />
+                    <p className="text-lg font-medium">Start the discussion</p>
+                    <p className="text-sm">Ask a question or upload a source to begin.</p>
                   </div>
                 )}
 
@@ -597,262 +649,81 @@ export default function LearnPage() {
                   <div
                     key={idx}
                     className={cn(
-                      "flex gap-2",
-                      msg.role === "user" ? "justify-end" : "justify-start",
-                      msg.quiz && "flex-col items-start" // Adjust layout for quiz messages
+                      "flex w-full mb-4 animate-fadeIn",
+                      msg.role === "user" ? "justify-end" : "justify-start"
                     )}
                   >
                     <div
                       className={cn(
-                        "max-w-xs px-3 py-2 rounded-lg text-sm group relative",
+                        "max-w-[85%] rounded-2xl px-5 py-3 shadow-sm text-sm leading-relaxed",
                         msg.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-surface/80 border border-border/50"
+                          ? "bg-primary text-primary-foreground rounded-tr-none"
+                          : "bg-surface/80 border border-border backdrop-blur-sm rounded-tl-none"
                       )}
                     >
-                      {msg.text && msg.text.includes("[") ? (
-                        <p className="text-xs opacity-75">{msg.text}</p>
-                      ) : (
-                        <div>
-                          <p>{msg.text || ""}</p>
-                          {msg.role === "teacher" && (
-                            <button
-                              onClick={() => {
-                                console.log("Replaying:", msg.text);
-                                tts.speak(msg.text);
-                              }}
-                              className="absolute -right-8 top-1 p-1.5 rounded-full bg-surface/50 hover:bg-surface text-muted-foreground hover:text-primary transition-all opacity-0 group-hover:opacity-100"
-                              title="Replay audio"
-                            >
-                              <Volume2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      )}
+                      <p className="whitespace-pre-wrap">{msg.text}</p>
                     </div>
                   </div>
                 ))}
-
-                {currentTeacherTextRef.current && (
-                  <div className="flex gap-2">
-                    <div className="max-w-xs px-3 py-2 rounded-lg text-sm bg-surface/80 border border-primary/30 animate-pulse">
-                      <p>{currentTeacherTextRef.current}</p>
-                    </div>
-                  </div>
-                )}
-
-                {isLoading && !currentTeacherTextRef.current && (
-                  <div className="flex gap-2">
-                    <Loader className="w-4 h-4 animate-spin text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Teacher is thinking...</span>
-                  </div>
-                )}
-
                 <div ref={messagesEndRef} />
               </div>
 
-              {ws.error && (
-                <div className="px-4 py-2 bg-red-500/10 border-t border-red-500/30 flex gap-2 text-xs text-red-600">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>{ws.error}</span>
-                </div>
-              )}
-
-              {!ws.connected && (
-                <div className="px-4 py-2 bg-yellow-500/10 border-t border-yellow-500/30 text-xs text-yellow-600">
-                  {ws.isReconnecting ? "Reconnecting..." : "Disconnected"}
-                </div>
-              )}
-
-              <div className="border-t border-border p-3 bg-surface/50 space-y-2">
-                <div className="flex gap-2">
+              <div className="p-4 bg-background/30 border-t border-border backdrop-blur-md">
+                <div className="flex gap-2 items-center bg-surface/50 p-1.5 rounded-xl border border-white/10 shadow-inner">
                   <button
-                    onClick={isPaused ? handleResume : handleInterrupt}
+                    onClick={togglePause}
                     className={cn(
-                      "p-2 rounded-lg transition-colors",
+                      "p-2.5 rounded-lg transition-all",
                       isPaused
-                        ? "bg-primary/20 hover:bg-primary/30 text-primary"
-                        : "bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-600"
+                        ? "bg-yellow-500/20 text-yellow-500 hover:bg-yellow-500/30"
+                        : "hover:bg-white/5 text-muted-foreground"
                     )}
                     title={isPaused ? "Resume" : "Pause"}
-                    suppressHydrationWarning
                   >
-                    {isPaused ? (
-                      <Play className="w-4 h-4" />
-                    ) : (
-                      <Pause className="w-4 h-4" />
-                    )}
-                  </button>
-
-                  <button
-                    onClick={tts.isPlaying ? tts.pause : tts.resume}
-                    className={cn(
-                      "p-2 rounded-lg transition-colors",
-                      tts.isPlaying
-                        ? "bg-blue-500/20 hover:bg-blue-500/30 text-blue-600"
-                        : "bg-gray-500/20 hover:bg-gray-500/30 text-gray-600"
-                    )}
-                    title={tts.isPlaying ? "Pause audio" : "Replay audio"}
-                    suppressHydrationWarning
-                  >
-                    {tts.isPlaying ? (
-                      <Volume2 className="w-4 h-4" />
-                    ) : (
-                      <VolumeX className="w-4 h-4" />
-                    )}
+                    {isPaused ? <Play className="w-5 h-5 fill-current" /> : <Pause className="w-5 h-5 fill-current" />}
                   </button>
 
                   <input
                     type="text"
                     placeholder={
                       isPaused
-                        ? "Speak now (interrupt mode)..."
-                        : isLoading
-                          ? "Type to interrupt teacher..."
-                          : "Ask a question..."
+                        ? "Speak now..."
+                        : "Ask a question..."
                     }
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    onKeyPress={(e) =>
-                      e.key === "Enter" && handleSendMessage()
-                    }
+                    onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
                     disabled={!ws.connected}
-                    className="flex-1 bg-background/50 border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
-                    suppressHydrationWarning
+                    className="flex-1 bg-transparent border-none focus:ring-0 text-sm px-2 py-1"
                   />
 
                   <button
-                    onClick={handleSendMessage}
-                    disabled={!ws.connected || !input.trim()}
-                    className="p-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    onClick={() => handleSendMessage()}
+                    disabled={!input.trim() || !ws.connected}
+                    className="p-2.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-primary/20"
                   >
                     <Send className="w-4 h-4" />
                   </button>
                 </div>
               </div>
-            </>
-          )}
-        </div>
-
-        <div className="flex-1 glass-card rounded-lg border border-border overflow-hidden flex flex-col">
-          <div className="p-4 border-b border-border bg-surface/50">
-            <h3 className="font-bold flex items-center gap-2 text-sm">
-              🤖 Virtual Board & Teacher
-            </h3>
-          </div>
-
-          <div className="flex-1 flex gap-4 p-4 overflow-hidden bg-gradient-to-br from-surface/30 to-background/50">
-            <div className="w-1/2 flex flex-col transition-all duration-300 -ml-4">
-              <div className="rounded-lg overflow-hidden shadow-2xl border border-white/10 bg-black/50 backdrop-blur-md relative w-full h-full flex items-center justify-center">
-                {isMounted ? (
-                  <>
-                    {/* Thinking video - plays once when loading (only if not speaking) */}
-                    <video
-                      ref={thinkingVideoRef}
-                      src="/avatars3/avatar-thinking.mp4"
-                      className={cn(
-                        "absolute inset-0 w-full h-full object-contain",
-                        isLoading && !isSpeaking ? "block" : "hidden"
-                      )}
-                      playsInline
-                      muted
-                      onEnded={() => {
-                        // Video plays once, then stops
-                        if (thinkingVideoRef.current) {
-                          thinkingVideoRef.current.pause();
-                        }
-                      }}
-                    />
-                    
-                    {/* Talking video - loops while speaking */}
-                    <video
-                      ref={talkingVideoRef}
-                      src="/avatars3/avatar-talking.mp4"
-                      className={cn(
-                        "absolute inset-0 w-full h-full object-contain",
-                        isSpeaking ? "block" : "hidden"
-                      )}
-                      playsInline
-                      muted
-                      loop
-                    />
-                    
-                    {/* Waiting image - shown when neither thinking nor speaking */}
-                    {!isLoading && !isSpeaking && (
-                      <Image
-                        src="/avatars3/avatar-waiting.png"
-                        alt="AI Teacher Avatar - Waiting"
-                        width={400}
-                        height={400}
-                        className="object-contain w-full h-full"
-                        priority
-                      />
-                    )}
-                  </>
-                ) : (
-                  /* Fallback during SSR - show waiting image */
-                  <Image
-                    src="/avatars3/avatar-waiting.png"
-                    alt="AI Teacher Avatar - Waiting"
-                    width={400}
-                    height={400}
-                    className="object-contain w-full h-full"
-                    priority
-                  />
-                )}
-              </div>
             </div>
 
-
-
-            <div className="flex-1 overflow-auto">
-              {boardActions.length === 0 ? (
-                <div className="text-center text-muted-foreground pt-12">
-                  <p className="text-sm">Board content will appear here</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {boardActions.map((action, idx) => (
-                    <div
-                      key={idx}
-                      className={cn(
-                        "bg-white/5 border border-white/10 rounded-lg p-3 animate-fadeIn shadow-sm hover:border-primary/30 transition-colors",
-                        action.kind === "HIGHLIGHT" && "border-yellow-500/50 bg-yellow-500/5"
-                      )}
-                    >
-                      {action.kind === "WRITE_TITLE" && (
-                        <h4 className="font-bold text-lg text-primary border-b border-primary/20 pb-1 mb-2">
-                          {action.payload.text}
-                        </h4>
-                      )}
-                      {action.kind === "WRITE_BULLET" && (
-                        <div className="flex gap-3 items-start">
-                          <div className="mt-1.5 w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
-                          <p className="text-sm leading-relaxed">{action.payload.text}</p>
-                        </div>
-                      )}
-                      {action.kind === "WRITE_STEP" && (
-                        <div className="flex gap-3 items-start bg-primary/5 rounded p-2">
-                          <div className="bg-primary text-primary-foreground text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shrink-0">
-                            {action.payload.position}
-                          </div>
-                          <p className="text-sm font-medium">{action.payload.text}</p>
-                        </div>
-                      )}
-                      {action.kind === "HIGHLIGHT" && (
-                        <div className="flex gap-2 items-center text-yellow-500">
-                          <Sparkles className="w-4 h-4" />
-                          <p className="text-sm font-bold italic">{action.payload.text}</p>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
+
+          {/* RIGHT COLUMN: Studio (20%) */}
+          <div className="col-span-12 lg:col-span-3 h-full overflow-hidden">
+            <StudioSidebar
+              onAction={(text: string) => handleSendMessage(text)}
+              disabled={!ws.connected || isLoading}
+            />
+          </div>
+
         </div>
       </div>
+
+
+
+
 
       {/* Start Session Overlay */}
       {

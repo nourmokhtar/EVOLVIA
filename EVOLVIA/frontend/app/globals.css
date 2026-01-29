@@ -1,4 +1,4 @@
-@import "tailwindcss/index.css";
+@import "tailwindcss";
 
 @theme {
   /* Default to Dark tokens for the primary premium feel */

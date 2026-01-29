@@ -14,9 +14,10 @@ interface QuizModalProps {
     payload: QuizPayload | null;
     onClose: () => void;
     onAnswer: (correct: boolean) => void;
+    currentLevel?: number;
 }
 
-export function QuizModal({ isOpen, payload, onClose, onAnswer }: QuizModalProps) {
+export function QuizModal({ isOpen, payload, onClose, onAnswer, currentLevel = 1 }: QuizModalProps) {
     const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
     const [isSubmitted, setIsSubmitted] = useState(false);
 
@@ -54,7 +55,7 @@ export function QuizModal({ isOpen, payload, onClose, onAnswer }: QuizModalProps
                     </div>
                     <div>
                         <h3 className="text-xl font-bold text-foreground">Quick Quiz</h3>
-                        <p className="text-sm text-muted-foreground">Test your understanding</p>
+
                     </div>
                 </div>
 
@@ -102,8 +103,8 @@ export function QuizModal({ isOpen, payload, onClose, onAnswer }: QuizModalProps
                 {isSubmitted && (
                     <div className="bg-muted/30 p-4 text-center text-sm text-muted-foreground animate-in slide-in-from-bottom-5">
                         {selectedIdx === payload.correct_index
-                            ? "🎉 Correct! Adjusting difficulty up..."
-                            : "❌ Not quite. Adjusting difficulty down..."}
+                            ? "🎉 Correct! Well done!"
+                            : "❌ Not quite. Keep going!"}
                     </div>
                 )}
 

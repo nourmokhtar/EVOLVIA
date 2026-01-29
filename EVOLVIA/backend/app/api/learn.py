@@ -20,6 +20,7 @@ from app.schemas.learn import (
     UserMessageEvent,
     InterruptEvent,
     ResumeEvent,
+    ChangeDifficultyEvent,
     StatusEvent,
     ErrorEvent,
     SessionStatus,
@@ -230,6 +231,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 event = InterruptEvent(**event_data)
             elif event_type == "RESUME":
                 event = ResumeEvent(**event_data)
+            elif event_type == "CHANGE_DIFFICULTY":
+                event = ChangeDifficultyEvent(**event_data)
             else:
                 await _send_event(
                     websocket,
@@ -277,6 +280,9 @@ async def _handle_event(
         session.update_activity()
         session.wait_for_answer()
         
+        # Add user message to history
+        session.add_history("user", event.text)
+
         # Generate teacher response
         # Use uploaded file content as lesson context if available
         lesson_context = session.uploaded_file_content or ""
@@ -290,10 +296,14 @@ async def _handle_event(
             difficulty_level=session.difficulty_level,
             interruption_count=session.interruption_count,
             has_uploaded_file=bool(session.uploaded_file_content),
+            history=session.history,
         )
         
         session.continue_teaching()
         session.next_step()
+        
+        # Add teacher response to history
+        session.add_history("assistant", response.speech_text)
         
         return {
             "status": session.status,
@@ -382,6 +392,21 @@ async def _handle_websocket_event(
                 session.handle_quiz_result(is_correct)
                 logger.info(f"Updated difficulty to {session.difficulty_level} after quiz result: {is_correct}")
 
+                # BROADCAST STATUS UPDATE
+                # Critical: Frontend needs to know the difficulty level changed immediately
+                await _send_event(
+                    websocket,
+                    StatusEvent(
+                        session_id=session.session_id,
+                        status=session.status,
+                        difficulty_level=session.difficulty_level,
+                        difficulty_title=session.difficulty_title,
+                        progress=session.progress
+                    )
+                )
+
+
+
                 # We pass the raw "[QUIZ_RESULT: ...]" string to learn_llm.py
                 # so it can apply the specific prompt logic we defined there.
             
@@ -392,6 +417,9 @@ async def _handle_websocket_event(
                 else:
                     student_input = f"[INTERRUPTION - new question] {student_input}"
             
+            # Add user message to history
+            session.add_history("user", student_input)
+
             # Generate teacher response
             # Use uploaded file content as lesson context if available
             lesson_context = session.uploaded_file_content or ""
@@ -405,7 +433,10 @@ async def _handle_websocket_event(
                 difficulty_level=session.difficulty_level,
                 interruption_count=session.interruption_count,
                 has_uploaded_file=bool(session.uploaded_file_content),
+                history=session.history,
             )
+
+
             
             # Stream speech as deltas (simulate streaming)
             # In production, this would come from the LLM streaming response
@@ -445,6 +476,9 @@ async def _handle_websocket_event(
                 ),
             )
             
+            # Add teacher response to history
+            session.add_history("assistant", response.speech_text)
+            
             # Record checkpoint
             session.continue_teaching()
             session.next_step()
@@ -483,6 +517,19 @@ async def _handle_websocket_event(
                 StatusEvent(
                     session_id=session.session_id,
                     status=SessionStatus.TEACHING,
+                ),
+            )
+        
+        elif isinstance(event, ChangeDifficultyEvent):
+            session.set_difficulty(event.level)
+            logger.info(f"Manually set difficulty to {event.level} ({session.difficulty_title})")
+            
+            # Broadcast new status with updated level
+            await _send_event(
+                websocket,
+                StatusEvent(
+                    session_id=session.session_id,
+                    status=session.status,
                     difficulty_level=session.difficulty_level,
                     difficulty_title=session.difficulty_title,
                 ),
