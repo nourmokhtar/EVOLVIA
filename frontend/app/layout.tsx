@@ -4,6 +4,7 @@ import "./globals.css";
 import Sidebar from "@/components/Sidebar";
 import Topbar from "@/components/Topbar";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { AuthProvider } from "@/app/context/AuthContext";
 
 const inter = Inter({
   subsets: ['latin'],
@@ -29,34 +30,36 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning className={`${inter.variable} ${outfit.variable}`}>
       <body className="bg-background text-foreground font-body overflow-x-hidden">
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="dark"
-          enableSystem
-          disableTransitionOnChange
-        >
-          <Sidebar />
-          <div className="pl-[256px] min-h-screen transition-all duration-300" id="main-content">
-            <Topbar />
-            <main className="p-8 pb-32">
-              {children}
-            </main>
-          </div>
+        <AuthProvider>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="dark"
+            enableSystem
+            disableTransitionOnChange
+          >
+            <Sidebar />
+            <div className="pl-[256px] min-h-screen transition-all duration-300" id="main-content">
+              <Topbar />
+              <main className="p-8 pb-32">
+                {children}
+              </main>
+            </div>
 
-          {/* Script to handle sidebar padding dynamically */}
-          <script dangerouslySetInnerHTML={{
-            __html: `
-            const observer = new MutationObserver((mutations) => {
+            {/* Script to handle sidebar padding dynamically */}
+            <script dangerouslySetInnerHTML={{
+              __html: `
+              const observer = new MutationObserver((mutations) => {
+                const sidebar = document.querySelector('aside');
+                const main = document.querySelector('#main-content');
+                if (sidebar && main) {
+                  main.style.paddingLeft = sidebar.offsetWidth + 'px';
+                }
+              });
               const sidebar = document.querySelector('aside');
-              const main = document.querySelector('#main-content');
-              if (sidebar && main) {
-                main.style.paddingLeft = sidebar.offsetWidth + 'px';
-              }
-            });
-            const sidebar = document.querySelector('aside');
-            if (sidebar) observer.observe(sidebar, { attributes: true, attributeFilter: ['class'] });
-          `}} />
-        </ThemeProvider>
+              if (sidebar) observer.observe(sidebar, { attributes: true, attributeFilter: ['class'] });
+            `}} />
+          </ThemeProvider>
+        </AuthProvider>
       </body>
     </html>
   );

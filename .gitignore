@@ -18,4 +18,10 @@ uploads/
 # Backend environment variables
 .env
 
+*.md 
+!README.md
+
+
+*.txt
+!requirements.txt 
 backend/documentation/

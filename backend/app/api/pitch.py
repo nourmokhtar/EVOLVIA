@@ -1,3 +1,9 @@
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from app.db.session import get_db
+from app.models import User
+from app.core.security import get_current_user
+from app.services.ai_service import ai_service
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -100,7 +106,8 @@ async def extract_deck(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/history")
-async def get_pitch_history():
+async def get_pitch_history(current_user: User = Depends(get_current_user)):
+    """Get user's pitch analysis history"""
     return [
         {"module": "Pitch Simulator", "score": 85, "date": "2026-01-20"}
     ]

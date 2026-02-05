@@ -26,3 +26,6 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# Export engine for table creation
+__all__ = ["engine", "SessionLocal", "get_db"]
