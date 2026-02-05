@@ -19,7 +19,7 @@ class PitchService:
     Service layer to handle pitch analysis requests via LangGraph + Groq Whisper.
     """
     
-    async def analyze_presentation_segment(self, video_bytes=None, audio_bytes=None, transcript_provided=""):
+    async def analyze_presentation_segment(self, video_frames=None, audio_bytes=None, transcript_provided=""):
         """
         Transcribes audio and then invokes the LangGraph to analyze the presentation.
         """
@@ -33,7 +33,8 @@ class PitchService:
 
             # 2. Initial state
             initial_state = {
-                "video_frame": video_bytes,
+                "video_frame": video_frames[0] if video_frames and len(video_frames) > 0 else None,
+                "video_frames": video_frames,
                 "audio_chunk": audio_bytes,
                 "transcript": transcript,
                 "posture_analysis": {},
@@ -49,17 +50,18 @@ class PitchService:
             # 3. Dynamic import to avoid module-level initialization crashes
             from .agents.pitch_analysis_graph import pitch_graph
             
-            # 4. Integrate Opik Tracing
-            try:
-                import os
-                from opik.integrations.langchain import OpikTracer
-                project_name = os.getenv("OPIK_PROJECT_NAME", "evolvia-coaching-platform")
-                opik_tracer = OpikTracer(project_name=project_name)
-                config = {"callbacks": [opik_tracer]}
-                print(f"--- INVOKING GRAPH WITH OPIK TRACING (Project: {project_name}) ---")
-            except Exception as opik_err:
-                print(f"--- OPIK NOT INITIALIZED: {str(opik_err)} (Continuing without tracing) ---")
-                config = {}
+            # 4. Integrate Opik Tracing (Disabled due to S3 upload errors with large frames)
+            config = {}
+            # try:
+            #     import os
+            #     from opik.integrations.langchain import OpikTracer
+            #     project_name = os.getenv("OPIK_PROJECT_NAME", "evolvia-coaching-platform")
+            #     opik_tracer = OpikTracer(project_name=project_name)
+            #     config = {"callbacks": [opik_tracer]}
+            #     print(f"--- INVOKING GRAPH WITH OPIK TRACING (Project: {project_name}) ---")
+            # except Exception as opik_err:
+            #     print(f"--- OPIK NOT INITIALIZED: {str(opik_err)} (Continuing without tracing) ---")
+            #     config = {}
 
             result = await pitch_graph.ainvoke(initial_state, config=config)
             print("--- GRAPH COMPLETE ---")

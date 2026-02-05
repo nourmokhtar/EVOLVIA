@@ -32,11 +32,11 @@ async def aggregator_node(state: PitchAnalysisState):
              Synthesize the data into a high-impact growth plan.
              
              INPUT DATA to consider:
-             - Posture: Look at 'head_lift_score', 'hands_visible', and 'strengths'.
+             - Posture: Look at 'head_lift_score', 'hands_visible', and the 'trends' field (which describes how body language evolved).
              - Tone: Look at 'wpm', 'silence_ratio', and 'pitch_variance'.
              - Stress: Look at 'stress_score' and 'nervous_habits'.
              
-             Generate a Summary that specifically references these details (e.g. 'Your high head lift showed confidence, but your fast WPM suggests anxiety').
+             Generate a Summary that specifically references these details and the PROGRESSION of the performance (e.g. 'You started strong but your energy dipped towards the end, as seen in your decreasing head lift score and slower pace').
 
              Respond ONLY in a single valid JSON object. 
              IMPORTANT: Do not use unescaped double quotes inside strings. Use single quotes if necessary.

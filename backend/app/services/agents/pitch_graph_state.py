@@ -7,7 +7,8 @@ class PitchAnalysisState(TypedDict):
     Shared state for the Pitch Analysis LangGraph workflow.
     """
     # Input data
-    video_frame: Optional[bytes]      # Current video frame for analysis
+    video_frame: Optional[bytes]      # Legacy single frame
+    video_frames: Optional[List[bytes]] # Multiple frames for temporal analysis
     audio_chunk: Optional[bytes]      # Current audio chunk for analysis
     transcript: Optional[str]         # Text transcript of the pitch segment
     

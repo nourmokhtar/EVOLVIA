@@ -13,17 +13,36 @@ except ImportError:
 @track
 async def posture_agent(state: PitchAnalysisState):
     """
-    Advanced Body Language Analysis Agent.
+    Advanced Body Language Analysis Agent supporting temporal (multi-frame) analysis.
     """
     print("--- POSTURE AGENT: ANALYZING KINETICS ---")
     try:
-        video_frame = state.get("video_frame")
-        if not video_frame:
+        video_frames = state.get("video_frames")
+        video_frame_single = state.get("video_frame")
+        
+        frames_to_process = video_frames if video_frames else ([video_frame_single] if video_frame_single else [])
+        
+        if not frames_to_process:
             return {"posture_analysis": {"score": 50, "feedback": "No visual data detected."}}
 
-        video_base64 = base64.b64encode(video_frame).decode('utf-8')
-        metrics = analyze_posture.invoke(video_base64)
+        all_metrics = []
+        print(f"Processing {len(frames_to_process)} frames for posture analysis...")
         
+        for idx, frame in enumerate(frames_to_process):
+            try:
+                video_base64 = base64.b64encode(frame).decode('utf-8')
+                frame_metrics = analyze_posture.invoke(video_base64)
+                if "error" not in frame_metrics:
+                    all_metrics.append({
+                        "frame_index": idx,
+                        "metrics": frame_metrics.get("metrics", {})
+                    })
+            except Exception as e:
+                print(f"Skipping frame {idx} due to error: {e}")
+
+        if not all_metrics:
+             return {"posture_analysis": {"score": 50, "feedback": "Could not extract metrics from any frames."}}
+
         llm = ChatGroq(
             model="llama-3.1-8b-instant",
             temperature=0.1,
@@ -33,8 +52,9 @@ async def posture_agent(state: PitchAnalysisState):
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a specialized Presentation Coach focusing on Non-Verbal Communication.
-             Analyze the provided computer vision metrics to give a detailed performance review.
-
+             Analyze the provided sequence of computer vision metrics to give a detailed performance review.
+             You are looking at multiple snapshots across the duration of a pitch.
+             
              METRICS EXPLANATION:
              - 'head_lift_score': Measures vertical projection. High = Confident/Projecting. Low = Looking down/Reading notes.
              - 'hands_visible': Count (0-2). Uses hands = Dynamic/Engaging. Static hands = Rigid.
@@ -42,27 +62,29 @@ async def posture_agent(state: PitchAnalysisState):
              - 'alignment_score': Measures centering. High = Focused on audience.
 
              YOUR TASK:
-             1. Calculate an internal score based on these metrics (weigh Head Lift and Hands heavily for presenters).
-             2. Provide a detailed prose 'feedback' summary covering the overall impression.
-             3. List specific 'strengths' (what they did well).
-             4. List specific 'improvements' (actionable advice).
+             1. Observe TRENDS over time. Did the posture improve or degrade?
+             2. Calculate an overall score (0-100) based on all frames.
+             3. Provide a detailed prose 'feedback' summary covering the overall impression and temporal changes.
+             4. List specific 'strengths' and 'improvements'.
+             5. Rate Authority and Engagement.
 
              Respond ONLY in valid JSON:
              {{
                 "score": int, (0-100)
-                "feedback": "string", (2-3 sentences summarizing the performance, mentioning both good and bad)
-                "strengths": ["string", "string"], (List of positive observations)
-                "improvements": ["string", "string"], (List of things to fix)
+                "feedback": "string", (3-4 sentences summarizing performance and any trends observed across frames)
+                "strengths": ["string", "string"],
+                "improvements": ["string", "string"],
                 "authority_rating": int, (0-10)
                 "engagement_rating": int, (0-10)
-                "is_good": bool (true if score > 70)
+                "is_good": bool,
+                "trends": "string" (Short description of how posture evolved)
              }}
              """),
-            ("user", "Live Metrics: {metrics}")
+            ("user", "Sequence of Live Metrics: {metrics}")
         ])
         
         chain = prompt | llm
-        response = await chain.ainvoke({"metrics": json.dumps(metrics)})
+        response = await chain.ainvoke({"metrics": json.dumps(all_metrics)})
         
         content = response.content.strip()
         try:
