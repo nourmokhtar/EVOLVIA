@@ -26,3 +26,13 @@ out/
 # System
 .DS_Store
 Thumbs.db
+
+# Large application files
+EVOLVIA/backend/models/
+EVOLVIA/models/
+*.onnx
+*.bin
+*.pt
+*.vrm
+*.db
+uploads/

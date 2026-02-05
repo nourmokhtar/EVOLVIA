@@ -42,7 +42,7 @@ export function RobotAvatar({
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const robotRef = useRef<THREE.Group | null>(null);
-  const animationIdRef = useRef<number>();
+  const animationIdRef = useRef<number | undefined>(undefined);
 
   // Initialize Three.js scene
   useEffect(() => {

@@ -137,11 +137,9 @@ function AvatarMesh({
     vrmRef.current = {
       scene: group,
       humanoid: null,
-      blendShapeProxy: {
-        getWeight: () => 0,
-        setWeight: () => {},
-        deleteExpression: () => {},
-        addExpression: () => {},
+      expressionManager: {
+        getValue: () => 0,
+        setValue: () => { },
       },
     } as any;
     setVrm(vrmRef.current);
@@ -166,12 +164,12 @@ function AvatarMesh({
       (targetMouthOpen - mouthSmoothedRef.current) * smoothingFactor;
 
     // Apply mouth animation to VRM blendshape
-    if (vrm.blendShapeProxy) {
+    if (vrm.expressionManager) {
       // Try to find "A" vowel expression (common in VRM)
       try {
-        // Set mouth blendshape
-        vrm.blendShapeProxy.setValue("mouthOpen", mouthSmoothedRef.current);
-        vrm.blendShapeProxy.setValue("mouthA", mouthSmoothedRef.current * 0.7);
+        // Set mouth expression
+        vrm.expressionManager.setValue("ih", mouthSmoothedRef.current);
+        vrm.expressionManager.setValue("aa", mouthSmoothedRef.current * 0.7);
       } catch (e) {
         // Silently fail if expression not available
       }

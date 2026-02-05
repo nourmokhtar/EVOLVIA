@@ -12,6 +12,7 @@ from typing import Optional
 import uuid
 import json
 import logging
+import asyncio
 
 from app.schemas.learn import (
     InboundEvent,
@@ -24,10 +25,12 @@ from app.schemas.learn import (
     StatusEvent,
     ErrorEvent,
     SessionStatus,
+    ToggleVoiceEvent,
 )
 from app.services.learn_session import LearnSessionManager, LearnSession
 from app.services.learn_llm import LearnLLMService
 from app.services.file_extractor import file_extractor
+from app.services.voice_manager import VoiceManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["learn"])
@@ -60,6 +63,8 @@ async def start_session(event: StartLessonEvent):
             session_id=session_id,
             lesson_id=event.lesson_id,
             user_id=str(event.user_id) if event.user_id else None,
+            initial_difficulty=event.initial_difficulty or 1,
+            language=event.language or "en",
         )
         logger.info("✅ Session created successfully")
 
@@ -158,6 +163,35 @@ async def upload_course_file(
     }
 
 
+@router.get("/learn/sessions")
+async def list_sessions():
+    """List all active sessions"""
+    # Use manager to list (fetches from DB)
+    sessions = session_manager.list_sessions()
+    
+    return [
+        {
+            "session_id": s.session_id,
+            "lesson_id": s.lesson_id,
+            "created_at": s.created_at.isoformat(),
+            "difficulty": s.difficulty_title,
+            "turns": len(s.history),
+            "summary": s.title
+        }
+        for s in sessions
+    ]
+
+
+@router.delete("/learn/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a session"""
+    success = session_manager.delete_session(session_id)
+    if not success:
+        # We might return 404, but for now just 200 with result is fine or just 200
+        pass
+    return {"status": "success", "deleted": success}
+
+
 # ============================================================================
 # WebSocket Endpoint (recommended for interrupt-anytime + streaming)
 # ============================================================================
@@ -167,33 +201,11 @@ async def upload_course_file(
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """
     WebSocket endpoint for interactive learning sessions.
-    
-    Flow:
-    1. Client connects with session_id
-    2. Server sends STATUS events as state changes
-    3. Client sends events (USER_MESSAGE, INTERRUPT, RESUME)
-    4. Server streams back: TEACHER_TEXT_DELTA, BOARD_ACTION, TEACHER_TEXT_FINAL, CHECKPOINT
-    
-    Example client flow:
-    - Connect: ws://localhost:8000/learn/ws/session-uuid
-    - Receive: STATUS {status: "TEACHING"}
-    - Send: USER_MESSAGE {"type": "USER_MESSAGE", "text": "Can you explain X?"}
-    - Receive: TEACHER_TEXT_DELTA {"delta": "Sure, let me..."}
-    - Receive: BOARD_ACTION {"action": {"kind": "WRITE_TITLE", ...}}
-    - ... more deltas ...
-    - Receive: TEACHER_TEXT_FINAL {"text": "..."}
-    - Receive: CHECKPOINT {"step_id": 1, "short_summary": "..."}
-    - User clicks "Ma Fhemtch" button
-    - Send: INTERRUPT {"reason": "MA_FHEMTCH"}
-    - Receive: STATUS {status: "PAUSED"}
-    - Send: RESUME {"step_id": 1}
-    - Receive: STATUS {status: "RESUMING"}
-    - Receive: STATUS {status: "TEACHING"}
     """
-    
     logger.info(f"WebSocket connection attempt for session {session_id}")
-    logger.info(f"Session manager has {len(session_manager.sessions)} sessions: {list(session_manager.sessions.keys())}")
     
+    await websocket.accept()
+
     # Validate session
     if not session_manager.session_exists(session_id):
         logger.error(f"Session {session_id} not found in session manager")
@@ -201,57 +213,111 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         return
     
     session = session_manager.get_session(session_id)
-    await websocket.accept()
-    
+    voice_manager = VoiceManager(sample_rate=16000)
+    voice_manager.auto_finish = False # Use manual toggle-to-talk
     logger.info(f"WebSocket connected for session {session_id}")
     
-    # Send initial status
-    await _send_event(
-        websocket,
-        StatusEvent(
-            session_id=session_id,
-            status=session.status,
-            difficulty_level=session.difficulty_level,
-            difficulty_title=session.difficulty_title,
-        ),
-    )
-    
     try:
-        while True:
-            # Wait for client event
-            data = await websocket.receive_text()
-            event_data = json.loads(data)
-            
-            # Parse event
-            event_type = event_data.get("type")
-            
-            if event_type == "USER_MESSAGE":
-                event = UserMessageEvent(**event_data)
-            elif event_type == "INTERRUPT":
-                event = InterruptEvent(**event_data)
-            elif event_type == "RESUME":
-                event = ResumeEvent(**event_data)
-            elif event_type == "CHANGE_DIFFICULTY":
-                event = ChangeDifficultyEvent(**event_data)
-            else:
-                await _send_event(
-                    websocket,
-                    ErrorEvent(
-                        session_id=session_id,
-                        error_code="INVALID_EVENT",
-                        message=f"Unknown event type: {event_type}",
-                    ),
+        # Send initial status
+        await _send_event(
+            websocket,
+            StatusEvent(
+                session_id=session_id,
+                status=session.status,
+                difficulty_level=session.difficulty_level,
+                difficulty_title=session.difficulty_title,
+            ),
+        )
+
+        # Send history if available
+        if session.history:
+            from app.schemas.learn import HistoryEvent
+            logger.info(f"Sending history for session {session_id} ({len(session.history)} items)")
+            await _send_event(
+                websocket,
+                HistoryEvent(
+                    session_id=session.session_id,
+                    history=session.history
                 )
-                continue
-            
-            # Handle event and stream responses
-            await _handle_websocket_event(
-                websocket, session, event, llm_service
             )
+        
+        while True:
+            # Wait for client event - can be text or binary
+            msg = await websocket.receive()
+            
+            if "text" in msg:
+                event_data = json.loads(msg["text"])
+                event_type = event_data.get("type")
+                
+                if event_type == "USER_MESSAGE":
+                    event = UserMessageEvent(**event_data)
+                elif event_type == "INTERRUPT":
+                    event = InterruptEvent(**event_data)
+                elif event_type == "RESUME":
+                    event = ResumeEvent(**event_data)
+                elif event_type == "CHANGE_DIFFICULTY":
+                    event = ChangeDifficultyEvent(**event_data)
+                elif event_type == "TOGGLE_VOICE":
+                    event = ToggleVoiceEvent(**event_data)
+                    
+                    if event.action == "start":
+                        voice_manager.start_recording()
+                    elif event.action == "stop":
+                        transcribed_text = await voice_manager.end_recording(
+                            language=None # Let Whisper auto-detect spoken language
+                        )
+                        logger.info(f"Manual Voice input captured: '{transcribed_text}'")
+                        from app.schemas.learn import VoiceTranscriptionEvent
+                        await _send_event(
+                            websocket,
+                            VoiceTranscriptionEvent(
+                                session_id=session_id,
+                                text=transcribed_text or ""
+                            )
+                        )
+                        continue
+                else:
+                    await _send_event(
+                        websocket,
+                        ErrorEvent(
+                            session_id=session_id,
+                            error_code="INVALID_EVENT",
+                            message=f"Unknown event type: {event_type}",
+                        ),
+                    )
+                    continue
+                
+                # Handle event and stream responses
+                await _handle_websocket_event(
+                    websocket, session, event, llm_service, voice_manager
+                )
+            elif "bytes" in msg:
+                # Handle binary audio chunk
+                audio_chunk = msg["bytes"]
+                # Log occasionally to confirm data flow without flooding
+                if not hasattr(voice_manager, '_chunk_count'): voice_manager._chunk_count = 0
+                voice_manager._chunk_count += 1
+                if voice_manager._chunk_count % 100 == 0:
+                    logger.info(f"Received 100 audio chunks (last size: {len(audio_chunk)} bytes)")
+                
+                transcribed_text = await voice_manager.add_audio_chunk(
+                    audio_chunk, 
+                    language=None # Let Whisper auto-detect
+                )
+                
+                if transcribed_text:
+                    logger.info(f"Voice input captured: {transcribed_text}")
+                    # Treat as UserMessageEvent
+                    event = UserMessageEvent(
+                        session_id=session_id,
+                        text=transcribed_text
+                    )
+                    await _handle_websocket_event(
+                        websocket, session, event, llm_service, voice_manager
+                    )
     
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for session {session_id}")
-        # Could optionally close session here or keep it alive for reconnection
     except Exception as e:
         logger.error(f"WebSocket error for session {session_id}: {e}")
         await _send_event(
@@ -338,6 +404,7 @@ async def _handle_websocket_event(
     session: LearnSession,
     event: InboundEvent,
     llm_service: LearnLLMService,
+    voice_manager: VoiceManager,
 ):
     """Handle an inbound event and stream responses (for WebSocket)"""
     
@@ -419,6 +486,7 @@ async def _handle_websocket_event(
             
             # Add user message to history
             session.add_history("user", student_input)
+            session_manager.update_session(session)
 
             # Generate teacher response
             # Use uploaded file content as lesson context if available
@@ -438,12 +506,23 @@ async def _handle_websocket_event(
 
 
             
-            # Stream speech as deltas (simulate streaming)
-            # In production, this would come from the LLM streaming response
+            # 1. Start Audio Synthesis in background immediately
+            async def get_audio():
+                try:
+                    return await voice_manager.synthesize_response(
+                        response.speech_text, 
+                        language=response.language
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to synthesize audio: {e}")
+                    return None
+            
+            audio_task = asyncio.create_task(get_audio())
+
+            # 2. Stream speech as deltas
             words = response.speech_text.split()
             for word in words:
                 from app.schemas.learn import TeacherTextDeltaEvent
-                
                 await _send_event(
                     websocket,
                     TeacherTextDeltaEvent(
@@ -451,11 +530,11 @@ async def _handle_websocket_event(
                         delta=word + " ",
                     ),
                 )
+                await asyncio.sleep(0.05) # Small sleep to make streaming visible
             
-            # Send board actions
+            # 3. Send board actions
             for action in response.board_actions:
                 from app.schemas.learn import BoardActionEvent
-                
                 await _send_event(
                     websocket,
                     BoardActionEvent(
@@ -464,9 +543,11 @@ async def _handle_websocket_event(
                     ),
                 )
             
-            # Send final speech
-            from app.schemas.learn import TeacherTextFinalEvent
+            # 4. Wait for audio to be ready
+            audio_data = await audio_task
             
+            # 5. Send final speech event
+            from app.schemas.learn import TeacherTextFinalEvent
             await _send_event(
                 websocket,
                 TeacherTextFinalEvent(
@@ -475,6 +556,10 @@ async def _handle_websocket_event(
                     board_actions=response.board_actions,
                 ),
             )
+            
+            # 6. Send audio binary immediately after final event
+            if audio_data:
+                await websocket.send_bytes(audio_data)
             
             # Add teacher response to history
             session.add_history("assistant", response.speech_text)
@@ -534,6 +619,10 @@ async def _handle_websocket_event(
                     difficulty_title=session.difficulty_title,
                 ),
             )
+        
+        elif isinstance(event, ToggleVoiceEvent):
+            # Already handled in the main loop, just ignore here to avoid fallthrough error
+            pass
         
         else:
             await _send_event(

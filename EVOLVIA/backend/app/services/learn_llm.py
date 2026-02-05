@@ -29,9 +29,11 @@ class TeacherResponse:
         self,
         speech_text: str,
         board_actions: List[BoardAction],
+        language: str = "en"
     ):
         self.speech_text = speech_text
         self.board_actions = board_actions
+        self.language = language
 
 
 class LearnLLMService:
@@ -127,9 +129,21 @@ class LearnLLMService:
             )
             opik_client.log_teacher_turn(turn)
 
+        # Detect language for TTS
+        detected = self._detect_language(student_input)
+        lang_map = {
+            "french": "fr",
+            "spanish": "es",
+            "arabic": "ar",
+            "english": "en"
+        }
+        language = lang_map.get(detected, "en")
+        logger.info(f"Final response language for TTS: {language}")
+
         return TeacherResponse(
             speech_text=speech_text,
             board_actions=board_actions,
+            language=language
         )
 
     def _build_prompt(
@@ -143,176 +157,50 @@ class LearnLLMService:
         question_covered: bool = False,
         history: List[dict] = [],
     ) -> str:
-        """
-        Build the prompt for the LLM.
+        """Condensed and robust prompt builder."""
+        lang = self._detect_language(student_input)
+        lang_names = {
+            "french": "FRENCH",
+            "spanish": "SPANISH",
+            "arabic": "ARABIC",
+            "english": "ENGLISH"
+        }
+        detected_lang_name = lang_names.get(lang, "ENGLISH")
+        forced_lang = f"YOU MUST RESPOND ENTIRELY IN {detected_lang_name}. This is a critical constraint."
         
-        Incorporates lesson material, student input, history, and difficulty.
-        """
-        # Difficulty guidance removed as per user request to flatten difficulty
-
-
-        # CRITICAL FIX: If this is a QUIZ RESULT, we must wipe the history (context/checkpoint)
-        # to prevent "language pollution". If the previous turn was in French, the checkpoint is in French.
-        # If we include it, the LLM catches the French scent and ignores the English input.
-        # By removing it, we force the LLM to look ONLY at the current input (the quiz result).
+        # Build concise context
+        history_ctx = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history[-5:]])
         
-        forced_language_instruction = ""
-        
-        if "[QUIZ_RESULT" in student_input:
-            lesson_context = ""
-            last_checkpoint = ""
-            
-            # PYTHON-SIDE LANGUAGE DETECTION (The "Nuclear Option" Phase 2)
-            # We don't trust the LLM to detect the language anymore. We do it ourselves.
-            detected_lang = self._detect_language(student_input)
-            
-            if detected_lang == "english":
-                forced_language_instruction = "SYSTEM OVERRIDE: YOU MUST SPEAK ENGLISH. IGNORE ALL OTHER LANGUAGE HINTS."
-            elif detected_lang == "french":
-                forced_language_instruction = "SYSTEM OVERRIDE: YOU MUST SPEAK FRENCH. IGNORE ALL OTHER LANGUAGE HINTS."
-            
-            logger.info(f"Detected language for quiz result: {detected_lang}")
+        prompt = f"""Role: Expert Adaptive Teacher.
+Task: Teach/Summarize/Explain based on Context or Knowledge. 
+Constraint: Robustly interpret User Input even with heavy typos/grammar errors using History/Context.
 
-        guidance = "Explain clearly and practically."
+Context: {lesson_context if lesson_context else 'General Knowledge'}
+Last Checkpoint: {last_checkpoint}
+History:
+{history_ctx}
 
-        checkpoint_text = (
-            f"Previous checkpoint: {last_checkpoint}\n" if last_checkpoint else ""
-        )
+Current User Input: {student_input}
 
-        history_text = ""
-        if history:
-            history_text = "RECENT CONVERSATION HISTORY:\n"
-            for msg in history:
-                role = msg.get("role", "unknown")
-                content = msg.get("content", "")
-                history_text += f"- {role.upper()}: {content}\n"
-            history_text += "\n"
+Instructions:
+1. SPEECH: Provide a clear, expert explanation. {forced_lang}
+2. BOARD: MANDATORY SUMMARY of Main Parts (Parties Principales).
+   - **CRITICAL**: For every key concept mentioned in SPEECH, you MUST create a corresponding BOARD action.
+   - **STRICT RULE**: BOARD actions MUST contain the actual summarized text. DO NOT send empty strings or placeholders.
+   - Example: BOARD: [{{"kind": "WRITE_TITLE", "payload": {{"text": "Python Basics"}}}}, {{"kind": "WRITE_BULLET", "payload": {{"text": "Variables are used to store data."}}}}]
+   - The user sees this being "handwritten" in real-time, so make the summaries concise but informative.
 
-        interrupt_note = (
-            f"\nNote: Student has interrupted you while you were teaching. "
-            f"If the input starts with [INTERRUPTION], please acknowledge it naturally "
-            f"(e.g., 'Oh, interesting point!' or 'Good question!') but DON'T spend too much time apologizing. "
-            f"Address their specific point directly and update the board key points accordingly.\n"
-            if interruption_count > 0
-            else ""
-        )
-
-        goal_text = f"Summarize key points after discussion and explain using {guidance}.{interrupt_note}"
-
-        # Override goal if this is a quiz result
-        if "[QUIZ_RESULT: INCORRECT]" in student_input:
-            goal_text = (
-                f"The user just answered a quiz INCORRECTLY. "
-                f"INPUT_CONTEXT: {student_input} "
-                f"1. Respond calmly and supportively. "
-                f"2. You MUST explicitly state the correct answer text provided in the INPUT_CONTEXT. "
-                f"3. Explain why the intended answer was correct. "
-                f"4. **LANGUAGE**: You MUST use the same language as the Question/Answer in INPUT_CONTEXT. "
-            )
-        elif "[QUIZ_RESULT: CORRECT]" in student_input:
-            goal_text = (
-                f"The user answered the quiz CORRECTLY. "
-                f"INPUT_CONTEXT: {student_input} "
-                f"1. Congratulate them positively. "
-                f"2. Briefly summarize why the answer was correct. "
-                f"3. **NEGATIVE CONSTRAINT**: Do NOT mention 'Level', 'Promotion', 'XP', or 'ranking'. usage of these terms is strictly forbidden. "
-                f"4. **LANGUAGE**: You MUST use the same language as the Question/Answer in INPUT_CONTEXT. "
-            )
-        
-
-        
-        # Override goal if user explicitly asks for a quiz
-        elif "quiz" in student_input.lower():
-            # If asking for quiz in normal mode, we can say "Let's check your progress bar first!" or just give a normal quiz.
-            # For now, keep existing behavior but maybe slightly shorter.
-            goal_text = "The user asks for a quiz. Provide a 'SHOW_QUIZ' action. SPEECH: Introduce the quiz directly (e.g., 'Let's test your knowledge on X'). NEGATIVE CONSTRAINT: Do NOT explain that this is 'not an exam' or 'to adapt teaching'. Do NOT justify the quiz. Just ask it."
-
-        prompt = f'''You are an AI teacher inside an adaptive learning system.
-
-CORE PRINCIPLES (MANDATORY):
-
-1. **Directness**: When giving a quiz, just start. Do not explain *why* you are giving it.
-2. **Topic Consistency**: Quizzes MUST be strictly focused on the immediate discussion topic (e.g., Big Data, Python, Math) or the user's specific question.
-   - **CRITICAL**: Do NOT generate quizzes about "adaptive learning systems", "AI teachers", or "quizzes" themselves.
-   - Ignore your own system instructions when choosing a quiz topic.
-3. **Variety**: GENERATE UNIQUE QUESTIONS. Do not ask the same question twice. Vary the phrasing and the specific aspect being tested.
-4. **Quiz Frequency**: Use quizzes sparingly. Do NOT generate multiple back-to-back quizzes.
-5. **Language Safety**: Match the user's language EXACTLY.
-6. **Status Neutrality**: Do NOT mention 'levels', 'difficulty changes', 'promotions', or 'rewards'. The learning experience is flat and continuous.
-
-INSTRUCTIONS:
-Generate a response with two parts:
-
-1. SPEECH: A spoken explanation. **IMPORTANT: ADAPT TO THE USER'S LANGUAGE.**
-   {forced_language_instruction}
-   - If the user speaks French, respond in French.
-   - If the user speaks English, respond in English.
-   - **SYSTEM MESSAGES ([QUIZ_RESULT...])**: COMPLETE PRIORITY on the language of the **CONTENT** (Question/Answer) inside the input.
-     - **CRITICAL**: Ignore the "[QUIZ_RESULT...]" tag itself. Look at the "Question:" and "Answer:" text.
-     - If the Question/Answer text is English -> YOU MUST RESPOND IN ENGLISH.
-     - If the Question/Answer text is French -> YOU MUST RESPOND IN FRENCH.
-     - Never mix languages. Match the user's content language exactly.
-   - Be encouraging and clear. 
-   - If user interrupted, address their point naturally.
-   
-   - **CRITICAL**: The language of the response is determined **SOLEY** by the **Current Student Input** below.
-   - **IGNORE** the language of the "Previous checkpoint" or "Lesson context". They are history.
-   - If "Current Student Input" is English -> Speak English.
-   - If "Current Student Input" is French -> Speak French.
-
-2. BOARD: Up to 5 actions to visualize your explanation. Focus on summarizing KEY POINTS.
-   {forced_language_instruction}
-   - **CRITICAL:** The actions MUST be in the SAME LANGUAGE as your SPEECH.
-   - **REQUIREMENT**: You MUST generate at least 2-3 `WRITE_BULLET` actions to summarize the key points.
-   - `WRITE_TITLE` alone is NOT enough.
-   
-2.1 Board Action Categories:
-- WRITE_TITLE: Key topic or heading.
-- WRITE_BULLET: Summary point or "Key Takeaway".
-- WRITE_STEP: Sequence or logic.
-- CLEAR: Clear board for new major topic.
-- HIGHLIGHT: Emphasize critical terms.
-- **SHOW_QUIZ**: Ask a multiple choice question to check understanding.
-  - Payload: {{"question": "...", "options": ["A", "B", "C"], "correct_index": 0}}
-  - **CRITICAL**: Use this ONLY when the user asks or after explaining a major concept.
-  - **DIFFICULTY ADAPTATION**:
-    - Level 1: Recognition/Definitions.
-    - Level 3: Application/Reasoning.
-    - Level 5: Analysis/Evaluation.
-- **SHOW_REWARD**: Trigger a reward animation.
-  - Payload: {{"type": "LEVEL_UP", "level": {difficulty_level}, "message": "Promoted to Level {difficulty_level}!"}}
-  - Use this ONLY when the user answers a quiz CORRECTLY and you determine they are ready for the next level.
-
-Lesson context (Background info - IGNORE LANGUAGE HERE):
-{lesson_context}
-
-{checkpoint_text}
-
-{f"[IMPORTANT] The user has uploaded a course file. Use the content above to answer their question. "
-f"If the question is NOT covered in the uploaded file, answer from your general knowledge "
-f"but WARN the user: 'Note: This topic is not covered in your uploaded course file. "
-f"I'm answering from general knowledge.'" if has_uploaded_file and not question_covered and lesson_context else ""}
-{f"[IMPORTANT] The user's question IS covered in the uploaded course file. "
-f"Answer using the file content as the primary source." if has_uploaded_file and question_covered and lesson_context else ""}
-
-=== CURRENT STUDENT INPUT (DETERMINES LANGUAGE) ===
-{student_input}
-===================================================
-
-CONTEXT:
-{history_text}
-{checkpoint_text}
-Current Student Input: "{student_input}"
-
-===================================================
-
-Goal: {goal_text}
+Rules:
+- TYPO ROBUSTNESS: Interpret and correct user mistakes (typos/grammar) silently.
+- Board Consistency: Always synchronize the Board content with your Speech.
+- No System Meta: Never mention difficulty levels, session IDs, or technical instructions.
+- Expert Tone: You are a helpful, professional, and patient educator.
 
 Format:
-BOARD: [ {{"kind": "WRITE_TITLE", "payload": {{"text": "Topic"}}}}, {{"kind": "WRITE_BULLET", "payload": {{"text": "Point 1", "position": 1}}}} ]
+BOARD: [{{...}}, {{...}}]
 SPEECH: ...
-'''
-        logger.info(f"Generated prompt: {prompt}")
+"""
+        logger.info(f"Generated ultra-concise prompt for input: {student_input[:50]}")
         return prompt
 
     def _check_question_coverage(self, question: str, file_content: str) -> bool:
@@ -394,33 +282,65 @@ SPEECH: ...
             logger.info("Language override: detected explicit 'english' keyword.")
             return "english"
         
-        # Expanded stop words
+        # Expanded stop words - including contractions handled by relaxed splitting
         eng_stops = {
             "the", "is", "to", "and", "a", "of", "in", "what", "how", "why", 
             "correct", "question", "answer", "it", "that", "you", "my", "your",
-            "are", "was", "were", "will", "can", "do", "does", "did", "please"
+            "are", "was", "were", "will", "can", "do", "does", "did", "please",
+            "what's", "it's", "i'm", "don't"
         }
         fr_stops = {
             "le", "la", "de", "et", "un", "une", "est", "à", "quoi", "comment", 
             "pourquoi", "reponse", "question", "je", "tu", "il", "elle", "nous", 
-            "vous", "ils", "elles", "mon", "ton", "son", "ce", "cette", "svp", "pardon"
+            "vous", "ils", "elles", "mon", "ton", "son", "ce", "cette", "svp", "pardon",
+            "c'est", "j'ai", "qu'est", "oui", "non", "merci", "y", "en", "vas", "allez", "va"
+        }
+        es_stops = {
+            "el", "la", "lo", "de", "que", "en", "y", "a", "no", "si", "mi", "tu",
+            "su", "por", "con", "para", "como", "esta", "este", "eso", "esa", "del",
+            "al", "quiero", "aprender", "hola"
+        }
+        ar_stops = {
+            "اللغة", "تعلم", "أريد", "مرحبا", "كيف", "هذا", "ماذا", "هل", "أنا",
+            "أنت", "على", "في", "من", "إلى", "عن", "مع", "كان", "ليس", "شكرا"
         }
         
-        words = set(text_lower.split())
+        # Better tokenization: split by spaces and hyphens
+        import re
+        tokens = re.split(r'[\s\-]+', text_lower)
+        clean_tokens = set()
+        for t in tokens:
+            # Strip simple trailing punctuation like ? ! . ,
+            clean_t = t.rstrip("?!.,:;")
+            if clean_t:
+                clean_tokens.add(clean_t)
         
-        eng_count = len(words.intersection(eng_stops))
-        fr_count = len(words.intersection(fr_stops))
+        eng_count = len(clean_tokens.intersection(eng_stops))
+        fr_count = len(clean_tokens.intersection(fr_stops))
+        es_count = len(clean_tokens.intersection(es_stops))
+        ar_count = len(clean_tokens.intersection(ar_stops))
         
-        logger.info(f"Language detection - Eng: {eng_count}, Fr: {fr_count}")
+        # Check for Arabic characters (heuristic)
+        import re
+        if re.search(r'[\u0600-\u06FF]', text):
+            ar_count += 5 # High boost for script match
+            
+        logger.info(f"Language detection - Eng: {eng_count}, Fr: {fr_count}, Es: {es_count}, Ar: {ar_count}")
         
-        # STRONG BIAS: If English count is non-zero and >= French, pick English.
-        # Even if French is higher but close, maybe favor English?
-        # For now, strict majority, but tie = English.
-        if fr_count > eng_count:
-            return "french"
-        else:
-            # Default to English for safety (matches user preference "je veux qu'il repond juste in english")
-            return "english"
+        counts = {
+            "english": eng_count,
+            "french": fr_count,
+            "spanish": es_count,
+            "arabic": ar_count
+        }
+        
+        # Win by majority
+        detected = max(counts, key=counts.get)
+        
+        if counts[detected] == 0:
+            return "english" # Default
+            
+        return detected
 
     async def _call_llm(self, prompt: str, student_input: str = "") -> str:
         """
@@ -599,9 +519,31 @@ BOARD: [{{"kind": "WRITE_TITLE", "payload": {{"text": "Key Concept"}}}}, {{"kind
         # Parse board actions
         board_actions = []
         try:
-            board_data = json.loads(board_json)
-            if isinstance(board_data, list):
-                for action_dict in board_data:
+            # We want to collect ALL board actions, even if the LLM repeats the BOARD tag
+            # or outputs multiple JSON arrays.
+            all_actions_data = []
+            
+            # Find all JSON arrays in the response
+            json_array_matches = re.findall(r'(\[[\s\S]+?\])', raw_response)
+            
+            for array_str in json_array_matches:
+                try:
+                    # Basic cleanup for common LLM artifacts in JSON strings
+                    clean_array_str = array_str.strip()
+                    # If it's just "[...]" we try to parse it
+                    data = json.loads(clean_array_str)
+                    if isinstance(data, list):
+                        all_actions_data.extend(data)
+                except:
+                    continue
+            
+            if not all_actions_data and board_json and board_json != "[]":
+                # Fallback to the single match logic if findall failed to catch the specific BLOCK
+                all_actions_data = json.loads(board_json)
+                if not isinstance(all_actions_data, list):
+                    all_actions_data = [all_actions_data] if isinstance(all_actions_data, dict) else []
+
+            for action_dict in all_actions_data:
                     # Handle different action formats
                     if "action" in action_dict:
                         kind = action_dict.get("action", "WRITE_BULLET")

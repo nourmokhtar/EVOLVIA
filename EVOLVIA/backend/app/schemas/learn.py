@@ -24,6 +24,7 @@ class InboundEventType(str, Enum):
     INTERRUPT = "INTERRUPT"
     RESUME = "RESUME"
     CHANGE_DIFFICULTY = "CHANGE_DIFFICULTY"
+    TOGGLE_VOICE = "TOGGLE_VOICE"
 
 
 class OutboundEventType(str, Enum):
@@ -33,7 +34,9 @@ class OutboundEventType(str, Enum):
     TEACHER_TEXT_FINAL = "TEACHER_TEXT_FINAL"
     BOARD_ACTION = "BOARD_ACTION"
     CHECKPOINT = "CHECKPOINT"
+    HISTORY = "HISTORY"
     ERROR = "ERROR"
+    VOICE_TRANSCRIPTION = "VOICE_TRANSCRIPTION"
 
 
 class SessionStatus(str, Enum):
@@ -79,6 +82,7 @@ class StartLessonEvent(InboundEventBase):
     lesson_id: str
     user_id: Optional[str] = None
     initial_difficulty: Optional[int] = Field(default=1, ge=1, le=5, description="Starting difficulty level (1-5)")
+    language: Optional[str] = Field(default="en", description="Language for the session (en, fr, es, ar)")
 
 
 class UserMessageEvent(InboundEventBase):
@@ -110,11 +114,19 @@ class ResumeEvent(InboundEventBase):
     """Resume teaching after interrupt/pause"""
     type: Literal[InboundEventType.RESUME] = InboundEventType.RESUME
     session_id: str
-    step_id: int
+    step_id: Optional[int] = None
+    from_checkpoint: Optional[str] = None
+
+
+class ToggleVoiceEvent(InboundEventBase):
+    """Manually start/stop voice recording"""
+    type: Literal[InboundEventType.TOGGLE_VOICE] = InboundEventType.TOGGLE_VOICE
+    session_id: str
+    action: Literal["start", "stop"]
 
 
 # Union type for all inbound events
-InboundEvent = Union[StartLessonEvent, UserMessageEvent, InterruptEvent, ResumeEvent, ChangeDifficultyEvent]
+InboundEvent = Union[StartLessonEvent, UserMessageEvent, InterruptEvent, ResumeEvent, ChangeDifficultyEvent, ToggleVoiceEvent]
 
 
 # ============================================================================
@@ -171,6 +183,18 @@ class CheckpointEvent(OutboundEventBase):
     short_summary: str
 
 
+class HistoryEvent(OutboundEventBase):
+    """Full history of the session (messages)"""
+    type: Literal[OutboundEventType.HISTORY] = OutboundEventType.HISTORY
+    history: List[dict]  # [{"role": "user"|"assistant", "content": "..."}]
+
+
+class VoiceTranscriptionEvent(OutboundEventBase):
+    """Transcription of manual voice recording (to be confirmed by user)"""
+    type: Literal[OutboundEventType.VOICE_TRANSCRIPTION] = OutboundEventType.VOICE_TRANSCRIPTION
+    text: str
+
+
 class ErrorEvent(OutboundEventBase):
     """Error occurred during session"""
     type: Literal[OutboundEventType.ERROR] = OutboundEventType.ERROR
@@ -185,7 +209,9 @@ OutboundEvent = Union[
     TeacherTextFinalEvent,
     BoardActionEvent,
     CheckpointEvent,
-    ErrorEvent
+    HistoryEvent,
+    ErrorEvent,
+    VoiceTranscriptionEvent
 ]
 
 

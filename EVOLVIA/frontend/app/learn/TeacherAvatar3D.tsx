@@ -34,11 +34,11 @@ export function TeacherAvatar3D({
       try {
         const THREE = await import("three");
         const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-        
+
         // Scene setup with transparent background
         const scene = new THREE.Scene();
         scene.background = null;
-        
+
         const width = containerRef.current!.clientWidth;
         const height = containerRef.current!.clientHeight;
         const camera = new THREE.PerspectiveCamera(
@@ -49,9 +49,9 @@ export function TeacherAvatar3D({
         );
         camera.position.set(0, 0.5, 2.5);
         camera.lookAt(0, 0.5, 0);
-        
-        const renderer = new THREE.WebGLRenderer({ 
-          antialias: true, 
+
+        const renderer = new THREE.WebGLRenderer({
+          antialias: true,
           alpha: true,
           powerPreference: "high-performance"
         });
@@ -59,8 +59,8 @@ export function TeacherAvatar3D({
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.0;
-        renderer.outputEncoding = THREE.sRGBEncoding;
-        
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+
         containerRef.current!.appendChild(renderer.domElement);
         sceneRef.current = { scene, camera, renderer };
 
@@ -145,7 +145,7 @@ export function TeacherAvatar3D({
           // Mouth animation
           if (mouthMorphRef.current) {
             const { mesh, index } = mouthMorphRef.current;
-            
+
             // Calculate target mouth value
             let target = 0;
             if (isSpeakingRef.current) {
@@ -195,7 +195,7 @@ export function TeacherAvatar3D({
       } catch (error) {
         console.error("Error loading Three.js scene:", error);
         setIsLoading(false);
-        return () => {};
+        return () => { };
       }
     };
 

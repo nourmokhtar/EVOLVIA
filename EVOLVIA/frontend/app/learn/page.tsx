@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import {
@@ -14,6 +14,8 @@ import {
   Play,
   Volume2,
   VolumeX,
+  Mic,
+  RefreshCw,
 } from "lucide-react";
 import { QuizModal } from "../components/learn/QuizModal";
 import { LevelUpPopup } from "../components/learn/LevelUpPopup";
@@ -28,6 +30,7 @@ import useLearnWebSocket, {
   BoardAction,
 } from "@/lib/hooks/useLearnWebSocket";
 import useTTS from "@/lib/hooks/useTTS";
+import useVoiceSystem from "@/lib/hooks/useVoiceSystem";
 
 
 interface Message {
@@ -47,6 +50,17 @@ export default function LearnPage() {
   const ws = useLearnWebSocket({ apiUrl: process.env.NEXT_PUBLIC_API_URL });
   const tts = useTTS({ provider: "web-audio" });
 
+  const voice = useVoiceSystem({
+    onAudioChunk: (chunk) => {
+      if (isVoiceRecordingRef.current) {
+        console.log("🎤 Sending audio chunk to backend...");
+        ws.sendAudioChunk(chunk);
+      }
+    },
+    threshold: 0.05, // Slightly higher for manual focus
+    silenceDuration: 1000
+  });
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -63,6 +77,7 @@ export default function LearnPage() {
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
 
   const [hasStarted, setHasStarted] = useState(false);
 
@@ -83,6 +98,9 @@ export default function LearnPage() {
       }
     };
     initSession();
+
+    // Start listening for voice
+    voice.startListening();
   };
 
   const [quizPayload, setQuizPayload] = useState<any>(null);
@@ -92,6 +110,16 @@ export default function LearnPage() {
   // Level Up State
   const [showLevelUp, setShowLevelUp] = useState(false);
   const [levelUpAmount, setLevelUpAmount] = useState(1);
+
+  const [isVoiceRecording, setIsVoiceRecording] = useState(false);
+  const isVoiceRecordingRef = useRef(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+
+  useEffect(() => {
+    isVoiceRecordingRef.current = isVoiceRecording;
+  }, [isVoiceRecording]);
+
+  const [historyRefreshTrigger, setHistoryRefreshTrigger] = useState(0);
 
   const [voiceCount, setVoiceCount] = useState(0);
 
@@ -146,169 +174,46 @@ export default function LearnPage() {
   const [currentLevel, setCurrentLevel] = useState(1);
   const [currentLevelTitle, setCurrentLevelTitle] = useState("Beginner");
 
-  useEffect(() => {
-    // Only run effects if started
-    if (!hasStarted) return;
-
-    const unsubscribeConnected = ws.on("connected", () => {
-      console.log("Connected to learning session");
-      setIsLoading(false);
-      addSystemMessage("Connected to teacher! Ready to learn.");
-    });
-
-    // Status updates (includes level changes and progress)
-    const unsubscribeStatus = ws.on("status", (event: any) => {
-      if (event.difficulty_level) setCurrentLevel(event.difficulty_level);
-      if (event.difficulty_title) setCurrentLevelTitle(event.difficulty_title);
-    });
-
-    const unsubscribeTeacherDelta = ws.on("teacher_text_delta", (event: any) => {
-      currentTeacherTextRef.current += event.delta;
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (last && last.role === "teacher" && !last.isFinal && !last.quiz) { // Ensure it's not a final message or quiz
-          // Update existing teacher message
-          return [
-            ...prev.slice(0, -1),
-            { ...last, text: currentTeacherTextRef.current },
-          ];
-        } else {
-          // New teacher message block
-          // If we are starting a stream, and last was user or final teacher, add new.
-          if (!last || last.role === "user" || last.isFinal || last.quiz) {
-            return [...prev, { role: "teacher", text: currentTeacherTextRef.current, timestamp: Date.now() }];
-          }
-          return prev;
-        }
-      });
-      scrollToBottom();
-    });
-
-    // Realtime board updates
-    const unsubscribeBoardAction = ws.on("board_action", (event: any) => {
-      if (event.action.kind === "SHOW_QUIZ") {
-        setQuizPayload(event.action.payload);
-        setIsQuizOpen(true);
-      } else if (event.action.kind === "SHOW_REWARD") {
-        console.log("REWARD ACTION RECEIVED:", event.action.payload);
-        if (event.action.payload?.type === "LEVEL_UP") {
-          setLevelUpAmount(event.action.payload.level || currentLevel + 1);
-          setShowLevelUp(true);
-        }
-      } else {
-        console.log("Realtime board action:", event.action);
-        setBoardActions((prev) => {
-          const newActions = [...prev];
-          const action = event.action;
-          if (action.kind === "CLEAR") {
-            newActions.length = 0;
-          } else {
-            newActions.push(action);
-          }
-          return newActions.slice(-10);
-        });
-      }
-    });
-
-    const unsubscribeTeacherFinal = ws.on(
-      "teacher_text_final",
-      (event: TeacherTextFinalEvent) => {
-        setIsLoading(false); // Teacher finished responding - allow new interactions
-        // Mark last message as final
-        // Also reset current ref for next turn? 
-        // Actually we set state one last time to be sure.
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last && last.role === "teacher" && !last.quiz) { // Ensure it's not a quiz message
-            return [
-              ...prev.slice(0, -1),
-              { ...last, text: event.text, isFinal: true },
-            ];
-          } else if (!last || last.role === "user" || last.isFinal || last.quiz) {
-            // If the last message was user, or already final, or a quiz, add a new final message
-            return [
-              ...prev,
-              { role: "teacher", text: event.text, timestamp: Date.now(), isFinal: true },
-            ];
-          }
-          return prev;
-        });
-        currentTeacherTextRef.current = "";
-        setIsSpeaking(false);
-
-        // Check for quiz action in this very event to prevent race condition
-        const hasQuizAction = event.board_actions?.some((a: any) => a.kind === "SHOW_QUIZ");
-
-        // Ensure we speak something even if streaming failed
-        // But ONLY if quiz is NOT open currently OR we just answered it (feedback)
-        // AND no new quiz arrived
-        if ((!isQuizOpenRef.current || isQuizAnsweredRef.current) && !hasQuizAction) {
-          if (currentTeacherTextRef.current.length < 5 && event.text.length > 5) {
-            console.log("Streaming likely failed, speaking full text fallback");
-            tts.speak(event.text);
-          } else {
-            tts.finalizeSpeech();
-          }
-        } else {
-          console.log("Quiz active or received - suppressing final speech");
-          tts.stop();
-        }
-
-        setIsSpeaking(true);
-        if (event.board_actions && event.board_actions.length > 0) {
-          console.log("Received final board actions:", event.board_actions);
-          // Merge or overwrite? Usually final has everything or just the summary. 
-          // If we listened to realtime, we might duplicate if we just append.
-          // Let's replace if we have a full set, or just rely on realtime? 
-          // Learn.py sends ALL actions in final. So replacing is safer to ensure sync.
-          setBoardActions(event.board_actions);
-        }
-        currentTeacherTextRef.current = "";
-        scrollToBottom();
-      }
-    );
-
-    const unsubscribeError = ws.on("error", (event: any) => {
-      addSystemMessage(`Error: ${event.message}`, "error");
-    });
-
-    const unsubscribeDisconnected = ws.on("disconnected", () => {
-      if (hasStarted) {
-        addSystemMessage("Connection lost. Attempting to reconnect...");
-      }
-    });
-
-    return () => {
-      unsubscribeConnected();
-      unsubscribeTeacherDelta();
-      unsubscribeBoardAction();
-      unsubscribeTeacherFinal();
-      unsubscribeError();
-      unsubscribeDisconnected();
-      ws.disconnect();
-    };
-  }, [lessonId, userId, hasStarted]);
-
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     setTimeout(
       () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }),
       100
     );
-  };
+  }, []);
 
-  const addSystemMessage = (text: string, type = "info") => {
+  const addSystemMessage = useCallback((text: string, type = "info") => {
     setMessages((prev) => [
       ...prev,
       {
-        role: "teacher",
-        text: `[${type.toUpperCase()}] ${text}`,
+        role: "system", // Ensure this is a valid role
+        text,
         timestamp: Date.now(),
+        isFinal: true,
       },
     ]);
-    scrollToBottom();
-  };
+  }, []);
 
-  const handleSendMessage = async (textOverride?: string) => {
+  // Ref for currentLevel to access inside useEffect without triggering re-run
+  const currentLevelRef = useRef(currentLevel);
+  useEffect(() => {
+    currentLevelRef.current = currentLevel;
+  }, [currentLevel]);
+
+  // Use ref to avoid re-triggering the main effect when state changes
+  const hasStartedRef = useRef(hasStarted);
+  useEffect(() => {
+    hasStartedRef.current = hasStarted;
+  }, [hasStarted]);
+
+  // Handle global disconnect ONLY on unmount
+  useEffect(() => {
+    return () => {
+      console.log("Component unmounting, disconnecting WebSocket");
+      ws.disconnect();
+    };
+  }, [ws.disconnect]);
+
+  const handleSendMessage = useCallback(async (textOverride?: string) => {
     const textToSend = typeof textOverride === 'string' ? textOverride : input;
 
     if (!textToSend.trim() || !ws.sessionId) return;
@@ -356,7 +261,242 @@ export default function LearnPage() {
     }
 
     scrollToBottom();
-  };
+  }, [input, ws.sessionId, ws.sendUserMessage, isPaused, isSpeaking, tts.isPlaying, isLoading, addSystemMessage, scrollToBottom]);
+
+  useEffect(() => {
+    const unsubscribeConnected = ws.on("connected", () => {
+      console.log("Connected to learning session");
+      setIsLoading(false);
+      addSystemMessage("Connected to teacher! Ready to learn.");
+    });
+
+    // Status updates (includes level changes and progress)
+    const unsubscribeStatus = ws.on("status", (event: any) => {
+      if (event.difficulty_level) setCurrentLevel(event.difficulty_level);
+      if (event.difficulty_title) setCurrentLevelTitle(event.difficulty_title);
+    });
+
+    const unsubscribeTeacherDelta = ws.on("teacher_text_delta", (event: any) => {
+      currentTeacherTextRef.current += event.delta;
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === "teacher" && !last.isFinal && !last.quiz) { // Ensure it's not a final message or quiz
+          // Update existing teacher message
+          return [
+            ...prev.slice(0, -1),
+            { ...last, text: currentTeacherTextRef.current },
+          ];
+        } else {
+          // New teacher message block
+          // If we are starting a stream, and last was user or final teacher, add new.
+          if (!last || last.role === "user" || last.isFinal || last.quiz) {
+            return [...prev, { role: "teacher", text: currentTeacherTextRef.current, timestamp: Date.now() }];
+          }
+          return prev;
+        }
+      });
+      scrollToBottom();
+    });
+
+    // Realtime board updates
+    const unsubscribeBoardAction = ws.on("board_action", (event: any) => {
+      if (event.action.kind === "SHOW_QUIZ") {
+        setQuizPayload(event.action.payload);
+        setIsQuizOpen(true);
+      } else if (event.action.kind === "SHOW_REWARD") {
+        console.log("REWARD ACTION RECEIVED:", event.action.payload);
+        if (event.action.payload?.type === "LEVEL_UP") {
+          setLevelUpAmount(event.action.payload.level || currentLevelRef.current + 1);
+          setShowLevelUp(true);
+        }
+      } else {
+        console.log("Realtime board action:", event.action);
+        setBoardActions((prev) => {
+          const newActions = [...prev];
+          const action = event.action;
+          if (action.kind === "CLEAR") {
+            newActions.length = 0;
+          } else {
+            newActions.push(action);
+          }
+          return newActions.slice(-10);
+        });
+      }
+    });
+
+    const unsubscribeTeacherFinal = ws.on(
+      "teacher_text_final",
+      (event: TeacherTextFinalEvent) => {
+        setIsLoading(false); // Teacher finished responding - allow new interactions
+
+        // Trigger history refresh to update session list/titles in sidebar
+        setHistoryRefreshTrigger(prev => prev + 1);
+
+        // Mark last message as final
+        // Also reset current ref for next turn? 
+        // Actually we set state one last time to be sure.
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.role === "teacher" && !last.quiz) { // Ensure it's not a quiz message
+            return [
+              ...prev.slice(0, -1),
+              { ...last, text: event.text, isFinal: true },
+            ];
+          } else if (!last || last.role === "user" || last.isFinal || last.quiz) {
+            // If the last message was user, or already final, or a quiz, add a new final message
+            return [
+              ...prev,
+              { role: "teacher", text: event.text, timestamp: Date.now(), isFinal: true },
+            ];
+          }
+          return prev;
+        });
+        currentTeacherTextRef.current = "";
+        setIsSpeaking(false);
+
+        // Check for quiz action in this very event to prevent race condition
+        const hasQuizAction = event.board_actions?.some((a: any) => a.kind === "SHOW_QUIZ");
+
+        // Ensure we speak something even if streaming failed
+        // But ONLY if quiz is NOT open currently OR we just answered it (feedback)
+        // AND no new quiz arrived
+        if ((!isQuizOpenRef.current || isQuizAnsweredRef.current) && !hasQuizAction) {
+          if (currentTeacherTextRef.current.length < 5 && event.text.length > 5) {
+            console.log("Streaming likely failed - relying on backend audio synthesis");
+            // tts.speak(event.text); // DISABLED browser voice for high-quality backend voice
+          } else {
+            // tts.finalizeSpeech(); // DISABLED browser voice
+          }
+        } else {
+          console.log("Quiz active or received - suppressing final speech");
+          // tts.stop(); // DISABLED browser voice command
+        }
+
+        if (event.board_actions && event.board_actions.length > 0) {
+          console.log("Received final board actions:", event.board_actions);
+          // Merge or overwrite? Usually final has everything or just the summary. 
+          // If we listened to realtime, we might duplicate if we just append.
+          // Let's replace if we have a full set, or just rely on realtime? 
+          // Learn.py sends ALL actions in final. So replacing is safer to ensure sync.
+          setBoardActions(event.board_actions);
+        }
+        currentTeacherTextRef.current = "";
+        scrollToBottom();
+      }
+    );
+
+    const unsubscribeError = ws.on("error", (event: any) => {
+      setIsLoading(false);
+      addSystemMessage(`Error: ${event.message}`, "error");
+    });
+
+    const unsubscribeDisconnected = ws.on("disconnected", () => {
+      setIsLoading(false);
+      if (hasStartedRef.current) {
+        addSystemMessage("Connection lost. Attempting to reconnect...");
+      }
+    });
+
+    // History restoration
+    const unsubscribeHistory = ws.on("history", (event: { history: any[] }) => {
+      console.log("Restoring history:", event.history);
+      const restoredMessages = event.history.map((msg, idx) => ({
+        role: (msg.role === "user" ? "user" : "teacher") as "user" | "teacher",
+        text: msg.content,
+        timestamp: Date.now() - (event.history.length - idx) * 1000, // fake timestamp
+        isFinal: true
+      }));
+      setMessages(restoredMessages);
+      // Ensure we clear the current streaming buffer so it doesn't duplicate
+      currentTeacherTextRef.current = "";
+      scrollToBottom();
+    });
+
+    const unsubscribeTranscription = ws.on("voice_transcription", (event: { text: string }) => {
+      console.log("📝 Received voice transcription:", event.text);
+      setIsTranscribing(false);
+
+      if (event.text && event.text.trim()) {
+        const text = event.text.trim();
+        // Show the text in the input bar for debugging
+        setInput(text);
+
+        // Brief delay so user can see it before it sends
+        setTimeout(() => {
+          handleSendMessage(text);
+          // Only clear if the current input is still the auto-transcribed text
+          setInput(prev => (prev === text || prev.trim() === text) ? "" : prev);
+        }, 1200);
+      } else {
+        addSystemMessage("Could not hear you clearly. Please try again.", "info");
+      }
+    });
+
+    return () => {
+      unsubscribeConnected();
+      unsubscribeStatus();
+      unsubscribeTeacherDelta();
+      unsubscribeBoardAction();
+      unsubscribeTeacherFinal();
+      unsubscribeError();
+      unsubscribeDisconnected();
+      unsubscribeHistory();
+      unsubscribeTranscription();
+    };
+  }, [ws.on, addSystemMessage, scrollToBottom, handleSendMessage]);
+
+  // Monitor voice errors
+  useEffect(() => {
+    if (voice.error) {
+      addSystemMessage(voice.error, "error");
+    }
+  }, [voice.error, addSystemMessage]);
+
+  // Handle audio output from backend (Piper TTS)
+  useEffect(() => {
+    const unsubscribeAudio = ws.on("audio_output", (audioBuffer: ArrayBuffer) => {
+      console.log("Received audio output from teacher");
+
+      // Stop any existing speech
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+
+      const blob = new Blob([audioBuffer], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      audio.onplay = () => setIsSpeaking(true);
+      audio.onended = () => {
+        setIsSpeaking(false);
+        URL.revokeObjectURL(url);
+      };
+
+      audio.play().catch(e => console.error("Error playing teacher voice:", e));
+    });
+
+    return () => unsubscribeAudio();
+  }, [ws.on]);
+
+  // Explicit Video Control for Avatar Sync
+  useEffect(() => {
+    if (isSpeaking && talkingVideoRef.current) {
+      talkingVideoRef.current.play().catch(e => console.warn("Avatar video play failed:", e));
+    } else if (!isSpeaking && talkingVideoRef.current) {
+      talkingVideoRef.current.pause();
+      talkingVideoRef.current.currentTime = 0;
+    }
+
+    if (isLoading && !isSpeaking && thinkingVideoRef.current) {
+      thinkingVideoRef.current.play().catch(e => console.warn("Thinking video play failed:", e));
+    } else if (thinkingVideoRef.current) {
+      thinkingVideoRef.current.pause();
+      thinkingVideoRef.current.currentTime = 0;
+    }
+  }, [isSpeaking, isLoading]);
+
 
   const handleInterrupt = () => {
     setIsPaused(true);
@@ -368,6 +508,9 @@ export default function LearnPage() {
     tts.stop();
     ws.interrupt(); // No reason needed for manual pause
     addSystemMessage("Teaching paused. You can now speak or ask questions. Click resume to continue normally.");
+
+    // Focus chat input for convenience
+    setTimeout(() => chatInputRef.current?.focus(), 100);
   };
 
   const handleResume = () => {
@@ -381,6 +524,31 @@ export default function LearnPage() {
       handleResume();
     } else {
       handleInterrupt();
+    }
+  };
+
+  const handleToggleVoice = () => {
+    if (!ws.connected) return;
+
+    if (!isVoiceRecording) {
+      // START RECORDING
+      setIsVoiceRecording(true);
+      isVoiceRecordingRef.current = true;
+
+      // Interrupt teacher if they are speaking
+      if (!isPaused) {
+        handleInterrupt();
+      }
+
+      ws.toggleVoice("start");
+      console.log("Started manual voice recording - chunks should now send");
+    } else {
+      // STOP RECORDING
+      setIsVoiceRecording(false);
+      isVoiceRecordingRef.current = false;
+      setIsTranscribing(true);
+      ws.toggleVoice("stop");
+      console.log("Stopped manual voice recording, waiting for transcription");
     }
   };
 
@@ -571,6 +739,7 @@ export default function LearnPage() {
         {/* 3-Column Layout */}
         <div className="grid grid-cols-12 gap-6 h-full">
 
+
           {/* LEFT COLUMN: Sources (20%) */}
           <div className="col-span-12 lg:col-span-3 h-full overflow-hidden">
             <SourceSidebar
@@ -578,6 +747,37 @@ export default function LearnPage() {
               onUpload={uploadFile}
               onRemove={() => setUploadedFileName(null)}
               isUploading={isUploading}
+              refreshTrigger={historyRefreshTrigger}
+              onSelectSession={(id) => {
+                if (id === ws.sessionId) return;
+                console.log("Switching to session:", id);
+
+                // USER REQUEST: Stop TTS and Avatar immediately
+                tts.stop();
+                setIsSpeaking(false);
+
+                ws.connect(id);
+                setHasStarted(true);
+                setMessages([]);
+                setBoardActions([]);
+              }}
+              currentSessionId={ws.sessionId}
+              onNewSession={async () => {
+                console.log("Starting new session...");
+
+                // USER REQUEST: Stop TTS and Avatar immediately
+                tts.stop();
+                setIsSpeaking(false);
+
+                await ws.disconnect();
+                setMessages([]);
+                setBoardActions([]);
+                setIsQuizOpen(false);
+                setShowLevelUp(false);
+                // Correct signature: startSession(lessonId, userId)
+                // Backend will generate the session ID
+                await ws.startSession(lessonId, userId);
+              }}
             />
           </div>
 
@@ -630,7 +830,11 @@ export default function LearnPage() {
 
               {/* Virtual Board - Takes remaining width */}
               <div className="flex-1 min-w-0">
-                <VirtualBoard actions={boardActions} className="h-full w-full" />
+                <VirtualBoard
+                  actions={boardActions}
+                  isSpeaking={isSpeaking}
+                  className="h-full w-full"
+                />
               </div>
             </div>
 
@@ -683,7 +887,40 @@ export default function LearnPage() {
                     {isPaused ? <Play className="w-5 h-5 fill-current" /> : <Pause className="w-5 h-5 fill-current" />}
                   </button>
 
+                  <button
+                    onClick={handleToggleVoice}
+                    disabled={!ws.connected || isTranscribing}
+                    className={cn(
+                      "p-2.5 rounded-lg transition-all flex items-center justify-center relative",
+                      isVoiceRecording ? "text-primary animate-pulse bg-primary/10 shadow-[0_0_15px_rgba(59,130,246,0.3)]" :
+                        isTranscribing ? "text-muted-foreground cursor-wait bg-white/5" :
+                          isSpeaking ? "text-red-400 hover:bg-red-500/10 animate-pulse bg-red-500/5" :
+                            "text-muted-foreground/30 hover:bg-white/5"
+                    )}
+                    title={isVoiceRecording ? "Stop recording" : isTranscribing ? "Transcribing..." : "Click to record voice"}
+                  >
+                    {isTranscribing ? (
+                      <RefreshCw className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Mic className={cn("w-5 h-5", (isVoiceRecording || isSpeaking) && "fill-current")} />
+                    )}
+
+                    {isVoiceRecording && (
+                      <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                      </span>
+                    )}
+                    {isSpeaking && !isVoiceRecording && !isTranscribing && (
+                      <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                      </span>
+                    )}
+                  </button>
+
                   <input
+                    ref={chatInputRef}
                     type="text"
                     placeholder={
                       isPaused

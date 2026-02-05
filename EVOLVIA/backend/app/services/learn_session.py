@@ -13,6 +13,7 @@ from app.schemas.learn import (
     SessionMetadata,
     CheckpointEvent,
 )
+from sqlmodel import SQLModel
 
 
 class LearnSession:
@@ -35,10 +36,12 @@ class LearnSession:
         lesson_id: str,
         user_id: Optional[str] = None,
         initial_difficulty: int = 1,
+        language: str = "en",
     ):
         self.session_id = session_id
         self.lesson_id = lesson_id
         self.user_id = user_id
+        self.language = language
         
         # State tracking
         self.status: SessionStatus = SessionStatus.IDLE
@@ -80,6 +83,21 @@ class LearnSession:
             5: "Expert"
         }
         return titles.get(self.difficulty_level, "Unknown")
+
+    @property
+    def title(self) -> str:
+        """Generate a display title for the session"""
+        if self.checkpoint_summary:
+            return self.checkpoint_summary
+        
+        # Try to find first user message to use as title
+        for msg in self.history:
+            if msg.get("role") == "user":
+                content = msg.get("content", "").strip()
+                if content:
+                    return (content[:40] + "...") if len(content) > 40 else content
+        
+        return f"Session {self.session_id[:8]}"
 
     def start(self) -> None:
         """Begin teaching session"""
@@ -165,8 +183,12 @@ class LearnSession:
     def add_history(self, role: str, content: str) -> None:
         """Add a message to history, keeping only last 10 items"""
         self.history.append({"role": role, "content": content})
-        if len(self.history) > 10:
-            self.history.pop(0)
+        if len(self.history) > 100: # Increase history limit if we store in DB
+             self.history.pop(0)
+        # We need a way to notify manager to save. 
+        # Ideally LearnSession shouldn't know about manager.
+        # But for now, let's assume the caller (API) will handle saving, OR we inject a callback.
+        # Actually, simpler: The API endpoint calls "add_history", so the API endpoint should trigger save.
 
     def update_activity(self) -> None:
         """Update last activity timestamp"""
@@ -183,30 +205,149 @@ class LearnSessionManager:
 
     def __init__(self):
         self.sessions: dict[str, LearnSession] = {}
+        # Ensure tables exist (dev mode convenience)
+        from app.db.session import engine
+        from app.models.learning_session import LearningSessionModel
+        SQLModel.metadata.create_all(engine)
+        
+        # Load active sessions from DB? Or just lazy load?
+        # Let's lazy load in get_session
+        pass
 
     def create_session(
         self,
         session_id: str,
         lesson_id: str,
         user_id: Optional[str] = None,
+        initial_difficulty: int = 1,
+        language: str = "en",
     ) -> LearnSession:
-        """Create a new session"""
+        """Create a new session and persist it"""
         if session_id in self.sessions:
             raise ValueError(f"Session {session_id} already exists")
-        session = LearnSession(session_id, lesson_id, user_id)
+            
+        session = LearnSession(session_id, lesson_id, user_id, initial_difficulty, language)
         session.start()
         self.sessions[session_id] = session
+        
+        self._save_session(session)
         return session
 
     def get_session(self, session_id: str) -> Optional[LearnSession]:
-        """Retrieve active session"""
-        return self.sessions.get(session_id)
+        """Retrieve active session, restoring from DB if needed"""
+        if session_id in self.sessions:
+            return self.sessions[session_id]
+        
+        # Try to load from DB
+        from app.db.session import SessionLocal
+        from app.models.learning_session import LearningSessionModel
+        
+        with SessionLocal() as db:
+            logger.info(f"Looking up session {session_id} in database...")
+            db_model = db.get(LearningSessionModel, session_id)
+            if db_model:
+                logger.info(f"Found session {session_id} in DB. Restoring...")
+                # Reconstruct LearnSession from DB model
+                session = LearnSession(
+                    session_id=db_model.session_id,
+                    lesson_id=db_model.lesson_id,
+                    user_id=db_model.user_id,
+                    initial_difficulty=db_model.difficulty_level,
+                    language=db_model.language or "en"
+                )
+                # Restore state
+                session.status = SessionStatus(db_model.status) if db_model.status in SessionStatus._value2member_map_ else SessionStatus.IDLE
+                session.history = db_model.history
+                session.checkpoints = db_model.checkpoints # Note: this needs proper casting if checkpoints are complex objects
+                session.checkpoint_summary = db_model.checkpoint_summary
+                
+                # Cache in memory
+                self.sessions[session_id] = session
+                return session
+                
+        return None
+
+    def _save_session(self, session: LearnSession):
+        """Persist session state to DB"""
+        from app.db.session import SessionLocal
+        from app.models.learning_session import LearningSessionModel
+        
+        with SessionLocal() as db:
+            db_model = db.get(LearningSessionModel, session.session_id)
+            if not db_model:
+                db_model = LearningSessionModel(
+                    session_id=session.session_id,
+                    lesson_id=session.lesson_id,
+                    user_id=session.user_id
+                )
+            
+            # Update fields
+            db_model.status = session.status.value
+            db_model.difficulty_level = session.difficulty_level
+            db_model.language = session.language
+            db_model.history = session.history
+            # db_model.checkpoints = session.checkpoints # serialization might be tricky if not plain dicts
+            db_model.checkpoint_summary = session.checkpoint_summary
+            db_model.last_activity = datetime.utcnow()
+            
+            db.add(db_model)
+            db.commit()
+
+    def update_session(self, session: LearnSession):
+        """Detailed save wrapper to be called after mutations"""
+        self._save_session(session)
+
+    def list_sessions(self) -> List[LearnSession]:
+        """List all sessions from DB"""
+        # First ensure in-memory ones are saved (optional, usually they are saved on change)
+        
+        from app.db.session import SessionLocal
+        from app.models.learning_session import LearningSessionModel
+        
+        sessions_list = []
+        with SessionLocal() as db:
+            models = db.query(LearningSessionModel).order_by(LearningSessionModel.last_activity.desc()).all()
+            for m in models:
+                # We return lightweight objects or just the properties needed?
+                # The API expects LearnSession objects or dicts. 
+                # Let's reconstruct minimal LearnSession objects
+                s = LearnSession(m.session_id, m.lesson_id, m.user_id, m.difficulty_level, m.language)
+                s.history = m.history
+                s.checkpoint_summary = m.checkpoint_summary
+                s.created_at = m.created_at
+                sessions_list.append(s)
+        
+        return sessions_list
 
     def close_session(self, session_id: str) -> None:
-        """Close and remove session"""
+        """Close and remove session from memory (persists in DB)"""
         if session_id in self.sessions:
+            # self._save_session(self.sessions[session_id]) # Save one last time
             del self.sessions[session_id]
 
+    def delete_session(self, session_id: str) -> bool:
+        """Delete session from DB and memory"""
+        # Remove from memory first
+        if session_id in self.sessions:
+            del self.sessions[session_id]
+            
+        # Delete from DB
+        from app.db.session import SessionLocal
+        from app.models.learning_session import LearningSessionModel
+        
+        with SessionLocal() as db:
+            db_model = db.get(LearningSessionModel, session_id)
+            if db_model:
+                db.delete(db_model)
+                db.commit()
+                return True
+        return False
+
     def session_exists(self, session_id: str) -> bool:
-        """Check if session is active"""
-        return session_id in self.sessions
+        """Check if session is active or in DB"""
+        if session_id in self.sessions:
+            return True
+        exists = self.get_session(session_id) is not None
+        if not exists:
+            logger.warning(f"Session check: {session_id} DOES NOT EXIST in memory or DB")
+        return exists

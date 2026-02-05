@@ -20,6 +20,7 @@ export type InboundEvent =
   | InterruptEvent
   | ResumeEvent
   | ChangeDifficultyEvent
+  | ToggleVoiceEvent
   | StatusEvent;
 
 export type OutboundEvent =
@@ -28,8 +29,15 @@ export type OutboundEvent =
   | BoardActionEvent
   | CheckpointEvent
   | ErrorEvent
-  // Fix: Add StatusEvent to OutboundEvent so we can handle it in the switch case
-  | StatusEvent;
+  | StatusEvent
+  | HistoryEvent
+  | VoiceTranscriptionEvent;
+
+export interface HistoryEvent {
+  type: "HISTORY";
+  session_id: string;
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+}
 
 export interface StartLessonEvent {
   type: "START_LESSON";
@@ -72,6 +80,12 @@ export interface ChangeDifficultyEvent {
   level: number;
 }
 
+export interface ToggleVoiceEvent {
+  type: "TOGGLE_VOICE";
+  session_id: string;
+  action: "start" | "stop";
+}
+
 // Outbound events from teacher
 export interface TeacherTextDeltaEvent {
   type: "TEACHER_TEXT_DELTA";
@@ -106,6 +120,12 @@ export interface CheckpointEvent {
   checkpoint_id: string;
   title: string;
   description: string;
+}
+
+export interface VoiceTranscriptionEvent {
+  type: "VOICE_TRANSCRIPTION";
+  session_id: string;
+  text: string;
 }
 
 export interface ErrorEvent {
@@ -182,6 +202,11 @@ export function useLearnWebSocket(
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCountRef = useRef(0);
   const eventHandlersRef = useRef<Map<string, Function[]>>(new Map());
+  const sessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    sessionIdRef.current = state.sessionId;
+  }, [state.sessionId]);
 
   // Event listener registration
   const on = useCallback((eventType: string, handler: Function) => {
@@ -212,7 +237,27 @@ export function useLearnWebSocket(
   // Connect to WebSocket
   const connect = useCallback(
     (sessionId: string) => {
-      if (state.connected || !sessionId) return;
+      if (!sessionId) return;
+
+      // Use ref to check session without triggering dependency changes
+      // Guard against multiple connection attempts to the SAME session if already connecting or open
+      if (wsRef.current &&
+        (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) &&
+        sessionIdRef.current === sessionId) {
+        return;
+      }
+
+      // If connected to a DIFFERENT session or closed, ensure old socket is cleaned up
+      if (wsRef.current) {
+        // Prevent onclose from attempting to reconnect the old session
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+
+      // Update state and ref immediately to reflect the intention
+      sessionIdRef.current = sessionId;
+      setState(prev => ({ ...prev, sessionId, error: null }));
 
       const wsUrl = new URL(apiUrl);
       wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
@@ -223,6 +268,7 @@ export function useLearnWebSocket(
 
       try {
         const ws = new WebSocket(finalUrl);
+        ws.binaryType = "arraybuffer";
 
         ws.onopen = () => {
           console.log("WebSocket connected:", sessionId);
@@ -238,11 +284,16 @@ export function useLearnWebSocket(
         };
 
         ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            handleWebSocketMessage(data);
-          } catch (e) {
-            console.error("Failed to parse WebSocket message:", e);
+          if (event.data instanceof ArrayBuffer) {
+            // Binary audio from backend
+            emit("audio_output", event.data);
+          } else {
+            try {
+              const data = JSON.parse(event.data);
+              handleWebSocketMessage(data);
+            } catch (e) {
+              console.error("Failed to parse WebSocket message:", e);
+            }
           }
         };
 
@@ -342,6 +393,13 @@ export function useLearnWebSocket(
           emit("teacher_text_final", data);
           break;
 
+
+        case "HISTORY":
+          const historyEvent = data as any; // Cast to specific type if defined
+          // History event structure: { type: "HISTORY", history: [{role: "user"|"assistant", content: "..."}] }
+          emit("history", historyEvent);
+          break;
+
         case "BOARD_ACTION":
           const action = (data as BoardActionEvent).action;
           if (action.kind === "CLEAR") {
@@ -360,6 +418,10 @@ export function useLearnWebSocket(
 
         case "CHECKPOINT":
           emit("checkpoint", data);
+          break;
+
+        case "VOICE_TRANSCRIPTION":
+          emit("voice_transcription", data);
           break;
 
         case "ERROR":
@@ -386,6 +448,20 @@ export function useLearnWebSocket(
       return true;
     } catch (e) {
       console.error("Failed to send WebSocket message:", e);
+      return false;
+    }
+  }, []);
+
+  // Send audio chunk (binary)
+  const sendAudioChunk = useCallback((chunk: ArrayBuffer) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    try {
+      wsRef.current.send(chunk);
+      return true;
+    } catch (e) {
+      console.error("Failed to send audio chunk:", e);
       return false;
     }
   }, []);
@@ -531,6 +607,15 @@ export function useLearnWebSocket(
     resume,
     getStatus,
     startSession,
+    sendAudioChunk,
+    toggleVoice: (action: "start" | "stop") => {
+      if (!state.sessionId) return false;
+      return sendMessage({
+        type: "TOGGLE_VOICE",
+        session_id: state.sessionId,
+        action,
+      });
+    },
 
     // Event listeners
     on,

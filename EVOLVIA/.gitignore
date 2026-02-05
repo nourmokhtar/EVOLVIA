@@ -41,3 +41,19 @@ verify_backend.py
 # OS
 .DS_Store
 Thumbs.db
+
+# Build and node_modules
+node_modules/
+.next/
+dist/
+build/
+
+# Application specific large files
+models/
+backend/models/
+*.onnx
+*.bin
+*.pt
+*.vrm
+virtual_closet.db
+uploads/
