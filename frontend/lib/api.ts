@@ -1,6 +1,6 @@
 // API Configuration
-export const API_URL =  'http://localhost:8000';
-// process.env.NEXT_PUBLIC_API_URL ||
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://evolvia-backend.onrender.com';
+
 // Evolvia API Endpoints
 export const API = {
   // Authentication

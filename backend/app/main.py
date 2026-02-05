@@ -30,7 +30,12 @@ def on_startup():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"https://evolvia-.*\.vercel\.app",
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://evolvia-6u8e.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
