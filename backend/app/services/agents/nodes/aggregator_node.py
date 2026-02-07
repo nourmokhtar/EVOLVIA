@@ -1,4 +1,6 @@
 from langchain_groq import ChatGroq
+from app.core.config import settings
+from langchain_core.messages import HumanMessage, SystemMessage
 import os
 from langchain_core.prompts import ChatPromptTemplate
 from ..pitch_graph_state import PitchAnalysisState
@@ -20,52 +22,50 @@ async def aggregator_node(state: PitchAnalysisState):
         stress = state.get("stress_analysis", {})
         transcript = state.get("transcript", "")
         
-        llm = ChatGroq(
-            model="llama-3.1-8b-instant",
-            temperature=0.1, # Lower temperature for stricter JSON
-            groq_api_key=os.getenv("GROQ_API_KEY"),
-            model_kwargs={"response_format": {"type": "json_object"}}
-        )
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are the Lead Executive Coach. 
-             Synthesize the data into a high-impact growth plan.
-             
-             INPUT DATA to consider:
-             - Posture: Look at 'head_lift_score', 'hands_visible', and the 'trends' field (which describes how body language evolved).
-             - Tone: Look at 'wpm', 'silence_ratio', and 'pitch_variance'.
-             - Stress: Look at 'stress_score' and 'nervous_habits'.
-             
-             Generate a Summary that specifically references these details and the PROGRESSION of the performance (e.g. 'You started strong but your energy dipped towards the end, as seen in your decreasing head lift score and slower pace').
-
-             Respond ONLY in a single valid JSON object. 
-             IMPORTANT: Do not use unescaped double quotes inside strings. Use single quotes if necessary.
-             
-             JSON Structure:
-             {{
-                "overall_score": int,
-                "summary": "vision-driven summary",
-                "recommendations": ["Strategy 1", "Strategy 2", "Strategy 3"],
-                "competency_map": {{
-                    "Authority": int,
-                    "Empathy": int,
-                    "Resilience": int,
-                    "Persuasion": int
-                }}
-             }}
-             """),
-            ("user", "Transcript: {transcript}\nPosture: {posture}\nTone: {tone}\nStress: {stress}")
-        ])
-        
-        chain = prompt | llm
-        response = await chain.ainvoke({
-            "transcript": transcript,
-            "posture": json.dumps(posture),
-            "tone": json.dumps(tone),
-            "stress": json.dumps(stress)
-        })
-        
-        content = response.content.strip()
+        # Determine which LLM to use
+        if settings.GROQ_API_KEY and settings.GROQ_API_KEY != "your_key_here":
+            llm = ChatGroq(
+                model="llama-3.1-8b-instant",
+                temperature=0.1,
+                groq_api_key=settings.GROQ_API_KEY,
+                model_kwargs={"response_format": {"type": "json_object"}}
+            )
+            
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", aggregator_system_prompt),
+                ("user", "Transcript: {transcript}\nPosture: {posture}\nTone: {tone}\nStress: {stress}")
+            ])
+            
+            chain = prompt | llm
+            response = await chain.ainvoke({
+                "transcript": transcript,
+                "posture": json.dumps(posture),
+                "tone": json.dumps(tone),
+                "stress": json.dumps(stress)
+            })
+            content = response.content.strip()
+        else:
+            print("--- USING TOKEN FACTORY FALLBACK FOR AGGREGATOR ---")
+            from openai import OpenAI
+            import httpx
+            
+            client = OpenAI(
+                api_key=settings.TOKEN_FACTORY_KEY,
+                base_url=settings.TOKEN_FACTORY_URL,
+                http_client=httpx.Client(verify=False)
+            )
+            
+            messages = [
+                {"role": "system", "content": aggregator_system_prompt + "\nIMPORTANT: Return ONLY valid JSON."},
+                {"role": "user", "content": f"Transcript: {transcript}\nPosture: {json.dumps(posture)}\nTone: {json.dumps(tone)}\nStress: {json.dumps(stress)}"}
+            ]
+            
+            response = client.chat.completions.create(
+                model=settings.TOKEN_FACTORY_MODEL,
+                messages=messages,
+                temperature=0.1,
+            )
+            content = response.choices[0].message.content.strip()
         
         # Robust JSON extraction
         try:
@@ -104,8 +104,35 @@ async def aggregator_node(state: PitchAnalysisState):
     except Exception as e:
         print(f"!!! AGGREGATOR FAILED: {str(e)} !!!")
         return {
-            "overall_score": 75,
-            "feedback_summary": "Solid foundation. Work on eye contact and vocal dynamics.",
-            "recommendations": ["Watch your pacing", "Stand tall"],
-            "competency_map": {"Authority": 70, "Empathy": 70, "Resilience": 70, "Persuasion": 70}
+            "overall_score": 0,
+            "feedback_summary": f"Analysis currently unavailable. Error: {str(e)}",
+            "recommendations": ["Check API configuration", "Restart backend server"],
+            "competency_map": {"Authority": 0, "Empathy": 0, "Resilience": 0, "Persuasion": 0}
         }
+
+aggregator_system_prompt = """You are the Lead Executive Coach. 
+Synthesize the data into a high-impact growth plan.
+
+INPUT DATA to consider:
+- Posture: Look at 'head_lift_score', 'hands_visible', and the 'trends' field (which describes how body language evolved).
+- Tone: Look at 'wpm', 'silence_ratio', and 'pitch_variance'.
+- Stress: Look at 'stress_score' and 'nervous_habits'.
+
+Generate a Summary that specifically references these details and the PROGRESSION of the performance (e.g. 'You started strong but your energy dipped towards the end, as seen in your decreasing head lift score and slower pace').
+
+Respond ONLY in a single valid JSON object. 
+IMPORTANT: Do not use unescaped double quotes inside strings. Use single quotes if necessary.
+
+JSON Structure:
+{
+    "overall_score": int,
+    "summary": "vision-driven summary",
+    "recommendations": ["Strategy 1", "Strategy 2", "Strategy 3"],
+    "competency_map": {
+        "Authority": int,
+        "Empathy": int,
+        "Resilience": int,
+        "Persuasion": int
+    }
+}
+"""

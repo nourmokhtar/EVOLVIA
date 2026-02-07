@@ -85,4 +85,4 @@ async def tone_agent(state: PitchAnalysisState):
         return {"tone_analysis": analysis}
     except Exception as e:
         print(f"!!! TONE AGENT FAILED: {str(e)} !!!")
-        return {"tone_analysis": {"score": 75, "feedback": "Your voice has a good baseline rhythm.", "voice_type": "Neutral"}}
+        return {"tone_analysis": {"score": 0, "feedback": "Vocal analysis failed. Check API configuration.", "voice_type": "Unavailable"}}

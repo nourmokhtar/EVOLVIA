@@ -13,6 +13,7 @@ export default function Topbar() {
                     type="text"
                     placeholder="Search modules, skills, or AI help..."
                     className="w-full bg-surface/50 border border-border rounded-xl py-2.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                    suppressHydrationWarning
                 />
             </div>
 
@@ -24,7 +25,7 @@ export default function Topbar() {
 
                 <ThemeToggle />
 
-                <button className="relative p-2 rounded-xl border border-border bg-surface hover:bg-white/5 transition-colors">
+                <button className="relative p-2 rounded-xl border border-border bg-surface hover:bg-white/5 transition-colors" suppressHydrationWarning>
                     <Bell className="w-5 h-5 text-muted-foreground" />
                     <span className="absolute top-2 right-2 w-2 h-2 bg-accent rounded-full border-2 border-background" />
                 </button>

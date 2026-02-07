@@ -64,4 +64,4 @@ async def stress_agent(state: PitchAnalysisState):
         return {"stress_analysis": analysis}
     except Exception as e:
         print(f"!!! STRESS AGENT FAILED: {str(e)} !!!")
-        return {"stress_analysis": {"stress_score": 30, "feedback": "You appear calm and centered.", "nervous_habits": []}}
+        return {"stress_analysis": {"stress_score": 0, "feedback": "Stress analysis failed. Check API configuration.", "nervous_habits": []}}

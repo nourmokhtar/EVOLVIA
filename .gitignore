@@ -1,21 +1,62 @@
-﻿# --- Frontend (Next.js) ---
-# Dependencies: local clones of your linked libraries
-node_modules/
-# Next.js build output
-.next/
-# Local environment variables (sensitive data)
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+myenv/
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
 .env.local
 
-# --- Backend (FastAPI / Python) ---
-# Python virtual environment
-venv/
-# Compiled Python files
-__pycache__/
-# SQLite database files
-*.db
-# Local uploads directory (user images)
+# Logs
+*.log
+server.log
+server_output.txt
+
+# Test files (temporary)
+test_*.py
+*_test.py
+
+# Debug/Development files
+debug_server.py
+simple_server.py
+start_server.py
+verify_backend.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build and node_modules
+node_modules/
+.next/
+dist/
+build/
+
+# Application specific large files
+models/
+backend/models/
+*.onnx
+*.bin
+*.pt
+*.vrm
+virtual_closet.db
 uploads/
 # Backend environment variables
 .env
 
-backend/documentation/

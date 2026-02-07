@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str = ""
     AWS_REGION: str = "us-east-1"
 
+    # Token Factory (Internal ESPRIT LLM)
+    TOKEN_FACTORY_KEY: str = "sk-e376096028c847389e18f6d1f650be93"
+    TOKEN_FACTORY_URL: str = "https://tokenfactory.esprit.tn/api"
+    TOKEN_FACTORY_MODEL: str = "hosted_vllm/Llama-3.1-70B-Instruct"
+
+    # Groq API Key (for agents)
+    GROQ_API_KEY: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 
 settings = Settings()
