@@ -36,15 +36,54 @@ async def tone_agent(state: PitchAnalysisState):
         metrics["wpm"] = wpm
         metrics["word_count"] = word_count
         
-        llm = ChatGroq(
-            model="llama-3.1-8b-instant",
-            temperature=0.1,
-            groq_api_key=os.getenv("GROQ_API_KEY"),
-            model_kwargs={"response_format": {"type": "json_object"}}
-        )
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a Vocal Psychology expert. 
+        if os.getenv("GROQ_API_KEY"):
+            llm = ChatGroq(
+                model="llama-3.1-8b-instant",
+                temperature=0.1,
+                groq_api_key=os.getenv("GROQ_API_KEY"),
+                model_kwargs={"response_format": {"type": "json_object"}}
+            )
+            
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", """You are a Vocal Psychology expert. 
+                 Analyze the speaker's delivery based on the provided acoustic metrics and text.
+                 
+                 METRICS EXPLANATION:
+                 - 'wpm' (Words Per Minute): Normal is 130-150. >160 is fast/anxious. <110 is slow.
+                 - 'pitch_variance': High (>25) = Expressive/Dynamic. Low (<15) = Monotone/Bored.
+                 - 'silence_ratio': High (>0.2) = Many pauses (thoughtful or hesitant). Low = Continuous speech.
+                 - 'volume_level': Energy indicator.
+
+                 Analyze the relationship between the TEXT content and the VOCAL metrics.
+                 Respond ONLY in valid JSON.
+                 {{
+                    "score": int, (0-100, based on engagement)
+                    "feedback": "string", (Specific advice on speed, tone, and pauses)
+                    "empathy_score": int,
+                    "energy_level": "Low/Calm/Dynamic/High",
+                    "speaking_rate_rating": "Slow/Ideal/Fast",
+                    "voice_type": "string"
+                 }}
+                 """),
+                ("user", "Metrics: {metrics}. Text: {transcript}")
+            ])
+            
+            chain = prompt | llm
+            response = await chain.ainvoke({"metrics": json.dumps(metrics), "transcript": transcript})
+            content = response.content.strip()
+        else:
+            print("--- USING TOKEN FACTORY FALLBACK FOR TONE AGENT ---")
+            from openai import OpenAI
+            import httpx
+            from app.core.config import settings
+            
+            client = OpenAI(
+                api_key=settings.TOKEN_FACTORY_KEY,
+                base_url=settings.TOKEN_FACTORY_URL,
+                http_client=httpx.Client(verify=False)
+            )
+            
+            system_prompt = """You are a Vocal Psychology expert. 
              Analyze the speaker's delivery based on the provided acoustic metrics and text.
              
              METRICS EXPLANATION:
@@ -55,22 +94,26 @@ async def tone_agent(state: PitchAnalysisState):
 
              Analyze the relationship between the TEXT content and the VOCAL metrics.
              Respond ONLY in valid JSON.
-             {{
-                "score": int, (0-100, based on engagement)
-                "feedback": "string", (Specific advice on speed, tone, and pauses)
+             {
+                "score": int,
+                "feedback": "string",
                 "empathy_score": int,
-                "energy_level": "Low/Calm/Dynamic/High",
-                "speaking_rate_rating": "Slow/Ideal/Fast",
+                "energy_level": "string",
+                "speaking_rate_rating": "string",
                 "voice_type": "string"
-             }}
-             """),
-            ("user", "Metrics: {metrics}. Text: {transcript}")
-        ])
+             }
+             """
+            
+            response = client.chat.completions.create(
+                model=settings.TOKEN_FACTORY_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt + "\nIMPORTANT: Return ONLY valid JSON."},
+                    {"role": "user", "content": f"Metrics: {json.dumps(metrics)}. Text: {transcript}"}
+                ],
+                temperature=0.1,
+            )
+            content = response.choices[0].message.content.strip()
         
-        chain = prompt | llm
-        response = await chain.ainvoke({"metrics": json.dumps(metrics), "transcript": transcript})
-        
-        content = response.content.strip()
         try:
             import re
             json_match = re.search(r"(\{.*\})", content, re.DOTALL)
@@ -78,7 +121,7 @@ async def tone_agent(state: PitchAnalysisState):
                 content = json_match.group(1)
             analysis = json.loads(content)
         except:
-            content = response.content.replace("```json", "").replace("```", "").strip()
+            content = content.replace("```json", "").replace("```", "").strip()
             analysis = json.loads(content)
 
         print(f"TONE RESULT: {json.dumps(analysis, indent=2)}")

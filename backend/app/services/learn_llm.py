@@ -48,13 +48,18 @@ class LearnLLMService:
     4. Log trace via Opik for observability
     """
 
-    def __init__(self, llm_provider: str = "llama", enable_tracing: bool = True):
+    def __init__(self, llm_provider: str = None, enable_tracing: bool = True):
         """
         Args:
-            llm_provider: "llama" or "gemini"
+            llm_provider: "llama", "gemini", or "token_factory". If None, checks env var.
             enable_tracing: Whether to log traces to Opik
         """
+        # Load from env if not provided
+        if not llm_provider:
+             llm_provider = os.getenv("LLM_PROVIDER", "llama")
+             
         self.llm_provider = llm_provider
+        logger.info(f"LearnLLMService initialized with provider: {self.llm_provider}")
         self.enable_tracing = enable_tracing
 
     async def generate_teacher_response(
@@ -759,6 +764,168 @@ BOARD: [{{"kind": "WRITE_TITLE", "payload": {{"text": "Key Concept"}}}}, {{"kind
         except Exception as e:
             logger.error(f"Error generating title: {e}")
             return "New Discussion"
+
+    async def generate_coaching_feedback(
+        self,
+        transcript: str,
+        fluency_metrics: dict,
+        pronunciation_metrics: dict,
+        language_code: str,
+        user_level: str,
+        goal: str,
+    ) -> dict:
+        """
+        Generate "super intelligent" coaching feedback using the LLM.
+        
+        Args:
+            transcript: The full text of what the user said.
+            fluency_metrics: Computed fluency stats (WPM, pauses, fillers).
+            pronunciation_metrics: Heuristic pronunciation issues.
+            language_code: 'en', 'fr', etc.
+            user_level: 'beginner', 'intermediate', 'advanced'
+            goal: User's goal (e.g. 'conversation', 'exam')
+            
+        Returns:
+            Dict matching the `CoachPayload` schema.
+        """
+        prompt = self._build_coaching_prompt(
+            transcript, fluency_metrics, pronunciation_metrics, language_code, user_level, goal
+        )
+        
+        try:
+            raw_response = await self._call_llm(prompt, student_input=transcript[:50])
+            
+            # Safety check: if we got the standard teaching mock, it's not valid coaching JSON
+            if "BOARD:" in raw_response and "SPEECH:" in raw_response:
+                raise ValueError("LLM returned standard teaching response instead of coaching JSON")
+                
+            return self._parse_coaching_response(raw_response)
+        except Exception as e:
+            logger.error(f"Coaching LLM call failed: {e}")
+            raise  # Let caller switch to heuristic fallback
+
+    def _build_coaching_prompt(
+        self,
+        transcript: str,
+        fluency_metrics: dict,
+        pronunciation_metrics: dict,
+        language_code: str,
+        user_level: str,
+        goal: str,
+    ) -> str:
+        lang_names = {
+            "en": "English", "fr": "French", "es": "Spanish", "it": "Italian", "ar": "Arabic"
+        }
+        target_lang = lang_names.get(language_code, "English")
+        
+        # Simplify metrics for prompt to save tokens/noise
+        fluency_summary = {
+            "wpm": int(fluency_metrics.get("speech_rate_wpm", 0)),
+            "pauses": len(fluency_metrics.get("long_pauses", [])),
+            "fillers": sum(fluency_metrics.get("filler_counts", {}).values()),
+            "score": int(fluency_metrics.get("fluency_score", 0))
+        }
+        
+        pron_issues = pronunciation_metrics.get("issues_summary", [])
+        pron_score = int(pronunciation_metrics.get("overall_score", 0))
+        
+        # Dynamic scoring rubric
+        rubric = ""
+        if user_level == "beginner":
+            rubric += "- GRADE GENTLY. Focus on basic intelligibility. Ignore minor grammar mistakes if meaning is clear.\n"
+            rubric += "- Suggest simple, high-frequency vocabulary improvements.\n"
+        elif user_level == "advanced":
+            rubric += "- GRADE STRICTLY. Penalize for unnatural phrasing, even if grammatically correct.\n"
+            rubric += "- Suggest sophisticated synonyms and idioms.\n"
+        else: # intermediate
+            rubric += "- Grade moderately. Expect correct basic grammar but allow complex errors.\n"
+
+        if goal == "business":
+            rubric += "- Focus on PROFESSIONAL TONE. Penalize slang. Suggest formal alternatives.\n"
+        elif goal == "exam":
+            rubric += "- Focus on PRECISION and RANGE. Highlight repeated words. Suggest academic vocabulary.\n"
+        else: # conversation
+            rubric += "- Focus on FLOW and NATURALNESS. Suggest colloquialisms where appropriate.\n"
+
+        return f"""Role: Expert Language Coach.
+Task: Analyze the user's speech and return a structured JSON coaching report.
+Target Language: {target_lang}
+User Level: {user_level}
+Goal: {goal}
+
+Input Data:
+TRANSCRIPT: "{transcript}"
+FLUENCY: {json.dumps(fluency_summary)}
+PRONUNCIATION_HEURISTICS: {json.dumps(pron_issues)}
+SCORES: Fluency {fluency_summary['score']}/100, Pronunciation {pron_score}/100
+
+Instructions:
+1. Detect specific mispronounced words (phonetic errors), grammar mistakes (conjugation, structure), and awkward phrasing.
+2. Evaluate Grammar and Vocabulary quality (0-100) based on the rubric below.
+3. Be encouraging but precise. "Super intelligent" means catching subtle errors a native speaker would notice.
+4. If the transcript is empty or nonsense, give feedback on speaking up.
+
+SCORING RUBRIC (Must Follow):
+{rubric}
+
+5. IMPORTANT: You MUST output ONLY valid JSON matching this exact schema:
+
+{{
+  "grammar_score": 85,
+  "grammar_feedback": "Mostly correct, but watch out for past tense.",
+  "vocabulary_score": 78,
+  "vocabulary_feedback": "Good use of basics; try more varied adjectives.",
+  "top_priorities": [
+    {{ "id": "p1", "title": "...", "reason": "..." }}
+  ],
+  "explanations": [
+    {{ "priority_id": "p1", "simple_explanation": "...", "language_specific_notes": "..." }}
+  ],
+  "micro_drills": [
+    {{ "priority_id": "p1", "title": "...", "instructions": "...", "estimated_seconds": 30 }}
+  ],
+  "example_sentences": [
+    {{ "priority_id": "p1", "sentence": "...", "phonetic_hint": "..." }}
+  ],
+  "retry_goal": {{
+      "description": "...", 
+      "metrics_target": {{ "target_fluency_score": 85, "max_long_pauses": 2 }} 
+  }}
+}}
+
+Output strictly valid JSON. No markdown fencing necessary, but if used, I will parse it.
+JSON:
+"""
+
+    def _parse_coaching_response(self, raw_response: str) -> dict:
+        """Parse strict JSON from coaching response."""
+        import json
+        import re
+        
+        # Clean up markdown code blocks if present
+        clean = raw_response.strip()
+        if clean.startswith("```"):
+            clean = re.sub(r'^```(?:json)?', '', clean)
+            clean = re.sub(r'```$', '', clean)
+        clean = clean.strip()
+        
+        try:
+            data = json.loads(clean)
+            # Basic validation of required fields
+            required = [
+                "top_priorities", "explanations", "micro_drills", "retry_goal",
+                "grammar_score", "vocabulary_score"
+            ]
+            for r in required:
+                if r not in data:
+                    raise ValueError(f"Missing key: {r}")
+            return data
+        except json.JSONDecodeError:
+            # Try to find JSON object in text
+            match = re.search(r'(\{[\s\S]+\})', clean)
+            if match:
+                return json.loads(match.group(1))
+            raise
 
     def _parse_response(self, raw_response: str) -> tuple[str, List[BoardAction]]:
         """

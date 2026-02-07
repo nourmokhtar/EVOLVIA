@@ -11,7 +11,8 @@ import {
     Settings,
     ChevronLeft,
     ChevronRight,
-    Sparkles
+    Sparkles,
+    Languages
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
@@ -19,6 +20,7 @@ import { cn } from '@/lib/utils';
 const navItems = [
     { href: '/', label: 'Dashboard', icon: LayoutDashboard },
     { href: '/learn', label: 'Learning', icon: BookOpen },
+    { href: '/language-improvement', label: 'Language Coach', icon: Languages },
     { href: '/practice', label: 'Soft Skills', icon: Mic2 },
     { href: '/personality', label: 'Personality', icon: BrainCircuit },
     { href: '/profile', label: 'Profile', icon: User },

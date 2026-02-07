@@ -147,7 +147,7 @@ Respond ONLY in valid JSON:
                 content = json_match.group(1)
             analysis = json.loads(content)
         except:
-            content = response.content.replace("```json", "").replace("```", "").strip()
+            content = content.replace("```json", "").replace("```", "").strip()
             analysis = json.loads(content)
 
         print(f"POSTURE RESULT: {json.dumps(analysis, indent=2)}")

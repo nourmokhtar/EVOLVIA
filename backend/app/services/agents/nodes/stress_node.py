@@ -21,35 +21,68 @@ async def stress_agent(state: PitchAnalysisState):
         tone_data = state.get("tone_analysis", {})
         posture_data = state.get("posture_analysis", {})
         
-        llm = ChatGroq(
-            model="llama-3.1-8b-instant",
-            temperature=0.1,
-            groq_api_key=os.getenv("GROQ_API_KEY"),
-            model_kwargs={"response_format": {"type": "json_object"}}
-        )
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a Stress & Performance Psychologist. 
+        if os.getenv("GROQ_API_KEY"):
+            llm = ChatGroq(
+                model="llama-3.1-8b-instant",
+                temperature=0.1,
+                groq_api_key=os.getenv("GROQ_API_KEY"),
+                model_kwargs={"response_format": {"type": "json_object"}}
+            )
+            
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", """You are a Stress & Performance Psychologist. 
+                 Combine TEXT fillers, VOCAL tones, and BODY posture to determine stress levels.
+                 Respond ONLY in valid JSON.
+                 {{
+                    "stress_score": int,
+                    "resilience_score": int,
+                    "feedback": "string",
+                    "nervous_habits": ["habit1", "habit2"]
+                 }}
+                 """),
+                ("user", "Fillers: {fillers}. Tone: {tone}. Posture: {posture}")
+            ])
+            
+            chain = prompt | llm
+            response = await chain.ainvoke({
+                "fillers": json.dumps(filler_metrics),
+                "tone": json.dumps(tone_data),
+                "posture": json.dumps(posture_data)
+            })
+            content = response.content.strip()
+        else:
+            print("--- USING TOKEN FACTORY FALLBACK FOR STRESS AGENT ---")
+            from openai import OpenAI
+            import httpx
+            from app.core.config import settings
+            
+            client = OpenAI(
+                api_key=settings.TOKEN_FACTORY_KEY,
+                base_url=settings.TOKEN_FACTORY_URL,
+                http_client=httpx.Client(verify=False)
+            )
+            
+            system_prompt = """You are a Stress & Performance Psychologist. 
              Combine TEXT fillers, VOCAL tones, and BODY posture to determine stress levels.
              Respond ONLY in valid JSON.
-             {{
+             {
                 "stress_score": int,
                 "resilience_score": int,
                 "feedback": "string",
                 "nervous_habits": ["habit1", "habit2"]
-             }}
-             """),
-            ("user", "Fillers: {fillers}. Tone: {tone}. Posture: {posture}")
-        ])
-        
-        chain = prompt | llm
-        response = await chain.ainvoke({
-            "fillers": json.dumps(filler_metrics),
-            "tone": json.dumps(tone_data),
-            "posture": json.dumps(posture_data)
-        })
-        
-        content = response.content.strip()
+             }
+             """
+            
+            response = client.chat.completions.create(
+                model=settings.TOKEN_FACTORY_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt + "\nIMPORTANT: Return ONLY valid JSON."},
+                    {"role": "user", "content": f"Fillers: {json.dumps(filler_metrics)}. Tone: {json.dumps(tone_data)}. Posture: {json.dumps(posture_data)}"}
+                ],
+                temperature=0.1,
+            )
+            content = response.choices[0].message.content.strip()
+
         try:
             import re
             json_match = re.search(r"(\{.*\})", content, re.DOTALL)
@@ -57,7 +90,7 @@ async def stress_agent(state: PitchAnalysisState):
                 content = json_match.group(1)
             analysis = json.loads(content)
         except:
-            content = response.content.replace("```json", "").replace("```", "").strip()
+            content = content.replace("```json", "").replace("```", "").strip()
             analysis = json.loads(content)
 
         print(f"STRESS RESULT: {json.dumps(analysis, indent=2)}")
