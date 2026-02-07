@@ -37,9 +37,39 @@ const courses = [
 
 export default function Dashboard() {
   const [mounted, setMounted] = useState(false);
+  const [courseCount, setCourseCount] = useState(3); // Default placeholder
 
   useEffect(() => {
     setMounted(true);
+
+    // Fetch sessions to count unique courses
+    const fetchStats = async () => {
+      try {
+        const response = await fetch('http://127.0.0.1:8000/api/v1/learn/sessions');
+        if (response.ok) {
+          const sessions = await response.json();
+
+          // Logic: unique (lesson_id || uploaded_file_name || session_id if free discussion)
+          const uniqueCourses = new Set();
+          sessions.forEach((s: any) => {
+            if (s.lesson_id) {
+              uniqueCourses.add(`lesson-${s.lesson_id}`);
+            } else if (s.uploaded_file_name) {
+              uniqueCourses.add(`file-${s.uploaded_file_name}`);
+            } else {
+              // Free discussion without specific lesson/file - unique per session
+              uniqueCourses.add(`session-${s.session_id}`);
+            }
+          });
+
+          setCourseCount(uniqueCourses.size);
+        }
+      } catch (error) {
+        console.error("Failed to fetch dashboard stats:", error);
+      }
+    };
+
+    fetchStats();
   }, []);
 
   return (
@@ -54,7 +84,7 @@ export default function Dashboard() {
         <div className="glass-card p-6 flex items-center justify-between">
           <div>
             <p className="text-sm text-muted-foreground font-medium mb-1">Courses in Progress</p>
-            <h3 className="text-3xl font-bold">3</h3>
+            <h3 className="text-3xl font-bold">{courseCount}</h3>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
             <BookOpen className="w-6 h-6" />

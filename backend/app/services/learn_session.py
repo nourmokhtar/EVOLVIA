@@ -5,6 +5,7 @@ States: IDLE → TEACHING → PAUSED → ANSWERING → RESUMING
 """
 
 from enum import Enum
+from sqlalchemy.orm.attributes import flag_modified
 from typing import Optional, List
 from datetime import datetime
 from app.schemas.learn import (
@@ -14,6 +15,9 @@ from app.schemas.learn import (
     CheckpointEvent,
 )
 from sqlmodel import SQLModel
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class LearnSession:
@@ -42,6 +46,7 @@ class LearnSession:
         self.lesson_id = lesson_id
         self.user_id = user_id
         self.language = language
+        self.custom_title: Optional[str] = None
         
         # State tracking
         self.status: SessionStatus = SessionStatus.IDLE
@@ -54,7 +59,12 @@ class LearnSession:
 
 
         self.checkpoint_summary: Optional[str] = None
+        self.checkpoint_summary: Optional[str] = None
         self.checkpoints: List[CheckpointEvent] = []
+        
+        # Study Artifacts
+        self.quizzes: List[dict] = []
+        self.flashcards: List[dict] = []
         
         # Progression & Exam logic
         self.progress: float = 0.0  # 0.0 to 1.0 (100%)
@@ -68,6 +78,7 @@ class LearnSession:
         # Uploaded course file content
         self.uploaded_file_content: Optional[str] = None
         self.uploaded_file_name: Optional[str] = None
+        self.uploaded_file_bytes: Optional[bytes] = None
         
         # Metadata for observability
         self.created_at: datetime = datetime.utcnow()
@@ -87,17 +98,20 @@ class LearnSession:
     @property
     def title(self) -> str:
         """Generate a display title for the session"""
-        if self.checkpoint_summary:
-            return self.checkpoint_summary
+        if self.custom_title:
+            return self.custom_title
         
-        # Try to find first user message to use as title
+        # Fallback to first user message if no custom title yet
         for msg in self.history:
             if msg.get("role") == "user":
                 content = msg.get("content", "").strip()
+                # Clean up metadata/tags
+                import re
+                content = re.sub(r'\[.*?\]\s*', '', content).strip()
                 if content:
                     return (content[:40] + "...") if len(content) > 40 else content
         
-        return f"Session {self.session_id[:8]}"
+        return "Nouvelle Discussion" if self.language and self.language.startswith("fr") else "New Discussion"
 
     def start(self) -> None:
         """Begin teaching session"""
@@ -181,10 +195,11 @@ class LearnSession:
         )
 
     def add_history(self, role: str, content: str) -> None:
-        """Add a message to history, keeping only last 10 items"""
-        self.history.append({"role": role, "content": content})
-        if len(self.history) > 100: # Increase history limit if we store in DB
-             self.history.pop(0)
+        """Add a message to history, stripping technical tags for UI/Sidebar clarity"""
+        import re
+        clean_content = re.sub(r'\[.*?\]\s*', '', content).strip()
+        self.history.append({"role": role, "content": clean_content})
+        # Removed history limit to allow full conversation retrieval
         # We need a way to notify manager to save. 
         # Ideally LearnSession shouldn't know about manager.
         # But for now, let's assume the caller (API) will handle saving, OR we inject a callback.
@@ -260,6 +275,12 @@ class LearnSessionManager:
                 session.history = db_model.history
                 session.checkpoints = db_model.checkpoints # Note: this needs proper casting if checkpoints are complex objects
                 session.checkpoint_summary = db_model.checkpoint_summary
+                session.quizzes = getattr(db_model, "quizzes", []) or []
+                session.flashcards = getattr(db_model, "flashcards", []) or []
+                session.custom_title = getattr(db_model, "custom_title", None) # Safe access if migration pending
+                session.uploaded_file_content = getattr(db_model, "uploaded_file_content", None)
+                session.uploaded_file_name = getattr(db_model, "uploaded_file_name", None)
+                session.uploaded_file_bytes = getattr(db_model, "uploaded_file_bytes", None)
                 
                 # Cache in memory
                 self.sessions[session_id] = session
@@ -288,7 +309,23 @@ class LearnSessionManager:
             db_model.history = session.history
             # db_model.checkpoints = session.checkpoints # serialization might be tricky if not plain dicts
             db_model.checkpoint_summary = session.checkpoint_summary
+            if hasattr(db_model, "quizzes"):
+                db_model.quizzes = list(session.quizzes) # Copy to ensure change
+                flag_modified(db_model, "quizzes")
+            if hasattr(db_model, "flashcards"):
+                db_model.flashcards = list(session.flashcards) # Copy to ensure change
+                flag_modified(db_model, "flashcards")
+            if hasattr(db_model, "custom_title"):
+                db_model.custom_title = session.custom_title
+            
+            # Persist uploaded file info
+            db_model.uploaded_file_content = session.uploaded_file_content
+            db_model.uploaded_file_name = session.uploaded_file_name
+            if hasattr(db_model, "uploaded_file_bytes"):
+                db_model.uploaded_file_bytes = session.uploaded_file_bytes
+
             db_model.last_activity = datetime.utcnow()
+
             
             db.add(db_model)
             db.commit()
@@ -314,6 +351,8 @@ class LearnSessionManager:
                 s = LearnSession(m.session_id, m.lesson_id, m.user_id, m.difficulty_level, m.language)
                 s.history = m.history
                 s.checkpoint_summary = m.checkpoint_summary
+                s.custom_title = getattr(m, "custom_title", None)
+                s.uploaded_file_name = getattr(m, "uploaded_file_name", None)
                 s.created_at = m.created_at
                 sessions_list.append(s)
         

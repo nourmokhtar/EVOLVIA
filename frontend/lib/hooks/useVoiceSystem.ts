@@ -71,6 +71,8 @@ export function useVoiceSystem(options: VoiceSystemOptions = {}) {
             const source = audioContext.createMediaStreamSource(stream);
             sourceRef.current = source;
 
+            console.log(`🎙️ Voice system active. Sample rate: ${audioContext.sampleRate}Hz`);
+
             // ScriptProcessorNode for simplicity (deprecated but working for this use case)
             const processor = audioContext.createScriptProcessor(4096, 1, 1);
             processorRef.current = processor;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import {
   MessageSquare,
@@ -16,12 +16,16 @@ import {
   VolumeX,
   Mic,
   RefreshCw,
+  Trophy,
 } from "lucide-react";
 import { QuizModal } from "../components/learn/QuizModal";
+import { FlashcardModal } from "../components/learn/FlashcardModal";
 import { LevelUpPopup } from "../components/learn/LevelUpPopup";
+import { StudyHubModal } from "../components/learn/StudyHubModal";
 import { SourceSidebar } from "../components/learn/SourceSidebar";
 import { StudioSidebar } from "../components/learn/StudioSidebar";
 import { VirtualBoard } from "../components/learn/VirtualBoard";
+import { ChatMessage } from "../components/learn/ChatMessage";
 
 
 import { cn } from "@/lib/utils";
@@ -43,21 +47,29 @@ interface Message {
 }
 
 export default function LearnPage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const lessonId = searchParams.get("lesson") || "lesson-001";
   const userId = searchParams.get("user") || "user-001";
+  const sessionIdParam = searchParams.get("session_id");
 
   const ws = useLearnWebSocket({ apiUrl: process.env.NEXT_PUBLIC_API_URL });
+
+
+  // 2. Sync URL with current session ID
   const tts = useTTS({ provider: "web-audio" });
 
   const voice = useVoiceSystem({
     onAudioChunk: (chunk) => {
       if (isVoiceRecordingRef.current) {
-        console.log("🎤 Sending audio chunk to backend...");
+        if (voiceCount % 50 === 0) {
+          console.log(`🎤 Sending chunk ${voiceCount}, size: ${chunk.byteLength} bytes`);
+        }
+        setVoiceCount(prev => prev + 1);
         ws.sendAudioChunk(chunk);
       }
     },
-    threshold: 0.05, // Slightly higher for manual focus
+    threshold: 0.01, // Lower threshold for better sensitivity
     silenceDuration: 1000
   });
 
@@ -79,33 +91,37 @@ export default function LearnPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
 
-  const [hasStarted, setHasStarted] = useState(false);
+  // Initialize session on mount
+  useEffect(() => {
+    setIsMounted(true);
 
-  // Initialize session ONLY after user interaction
-  const startLearning = () => {
-    setHasStarted(true);
+    const init = async () => {
+      // Small delay to ensure everything is ready
+      await new Promise(resolve => setTimeout(resolve, 500));
 
-    // Initialize audio context
-    if (tts.resume) tts.resume();
+      // Initialize audio context (may still require first click elsewhere for some browsers)
+      if (tts.resume) tts.resume();
 
-    // Start WebSocket session
-    const initSession = async () => {
+      // Start WebSocket session
       setIsLoading(true);
-      const success = await ws.startSession(lessonId, userId);
-      if (!success) {
+      const currentSessionId = await ws.startSession(lessonId, userId);
+
+      if (!currentSessionId) {
         addSystemMessage("Failed to connect to teacher", "error");
         setIsLoading(false);
       }
     };
-    initSession();
 
-    // Start listening for voice
-    voice.startListening();
-  };
+    init();
+  }, []);
 
   const [quizPayload, setQuizPayload] = useState<any>(null);
   const [isQuizOpen, setIsQuizOpen] = useState(false);
   const isQuizOpenRef = useRef(false);
+
+  const [isFlashcardsOpen, setIsFlashcardsOpen] = useState(false);
+  const [flashcardPayload, setFlashcardPayload] = useState<any>(null);
+  const isFlashcardsOpenRef = useRef(false);
 
   // Level Up State
   const [showLevelUp, setShowLevelUp] = useState(false);
@@ -121,12 +137,103 @@ export default function LearnPage() {
 
   const [historyRefreshTrigger, setHistoryRefreshTrigger] = useState(0);
 
+  // Study Hub State
+  const [isStudyHubOpen, setIsStudyHubOpen] = useState(false);
+  const [savedQuizzes, setSavedQuizzes] = useState<any[]>([]);
+  const [savedFlashcards, setSavedFlashcards] = useState<any[]>([]);
+  // const [studyHubSessionTitle, setStudyHubSessionTitle] = useState(""); // Removed, handled per item now
+
+  const fetchStudyHubItems = async () => {
+    if (!ws.sessionId) {
+      addSystemMessage("Please start a session to view the Study Hub.", "info");
+      return;
+    }
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      // Fetch items for the CURRENT session only
+      const res = await fetch(`${apiUrl}/api/v1/learn/sessions/${ws.sessionId}`);
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log("Session Study Hub Data:", data);
+        setSavedQuizzes(data.quizzes || []);
+        setSavedFlashcards(data.flashcards || []);
+        setIsStudyHubOpen(true);
+      } else {
+        console.error("Study Hub Fetch Failed:", res.status, res.statusText);
+        addSystemMessage("Could not load Study Hub items for this session.", "error");
+      }
+    } catch (err: any) {
+      console.error("Study Hub Error:", err);
+      addSystemMessage(`Error loading Study Hub: ${err.message}`, "error");
+    }
+  };
+
+  const handleOpenStudyHub = () => {
+    fetchStudyHubItems();
+  };
+
+  const handleDeleteArtifact = async (item: any, type: "quiz" | "flashcards", index: number) => {
+    // Note: index passed here is the index in the VIEW list, but we need the original_index from the item metadata
+    // The item object itself contains source_title, session_id, and original_index.
+
+    const sessionId = item.session_id;
+    const originalIndex = item.original_index;
+
+    if (!sessionId || originalIndex === undefined) {
+      addSystemMessage("Cannot delete this item: missing metadata.", "error");
+      return;
+    }
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${apiUrl}/api/v1/learn/sessions/${sessionId}/artifacts?type=${type}&index=${originalIndex}`, {
+        method: 'DELETE'
+      });
+
+      if (res.ok) {
+        addSystemMessage("Item deleted successfully.", "success");
+        // Refresh the list
+        fetchStudyHubItems();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addSystemMessage(`Delete failed: ${err.detail || res.statusText}`, "error");
+      }
+    } catch (err: any) {
+      addSystemMessage(`Delete error: ${err.message}`, "error");
+    }
+  };
+
+  const handleRestoreFromStudyHub = (action: any) => {
+    console.log("Restoring from Study Hub:", action);
+    if (action.kind === "SHOW_FLASHCARDS") {
+      setFlashcardPayload(action.payload);
+      setIsFlashcardsOpen(true);
+    } else if (action.kind === "SHOW_QUIZ") {
+      setQuizPayload(action.payload);
+      setIsQuizOpen(true);
+    }
+  };
+
+  // Handle session loss (e.g. server restart or invalid session)
+  useEffect(() => {
+    if (ws.error && (ws.error.includes("Session ended") || ws.error.toLowerCase().includes("not found"))) {
+      console.warn("Session ended or invalid. Resetting state.");
+      setIsLoading(false);
+
+      // CRITICAL: Clear the URL so we don't try to auto-resume this dead session
+      const params = new URLSearchParams(searchParams.toString());
+      if (params.has("session_id")) {
+        params.delete("session_id");
+        router.replace(`?${params.toString()}`);
+      }
+    }
+  }, [ws.error, router, searchParams]);
+
   const [voiceCount, setVoiceCount] = useState(0);
 
   // Set mounted state to prevent hydration mismatches
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
 
   useEffect(() => {
     const updateVoices = () => {
@@ -151,14 +258,9 @@ export default function LearnPage() {
 
   useEffect(() => {
     // Check if the last action is a quiz
-    const lastAction = boardActions[boardActions.length - 1];
+    const lastAction = boardActions.find(a => a.kind === "SHOW_QUIZ");
 
-    // Debug logging
-    if (lastAction) {
-      console.log("Latest Board Action:", lastAction.kind, lastAction.payload);
-    }
-
-    if (lastAction?.kind === "SHOW_QUIZ") {
+    if (lastAction && !isQuizOpenRef.current && !isQuizAnsweredRef.current) {
       console.log("Triggering QUIZ MODAL!", lastAction.payload);
       setQuizPayload(lastAction.payload);
       setIsQuizOpen(true);
@@ -199,11 +301,6 @@ export default function LearnPage() {
     currentLevelRef.current = currentLevel;
   }, [currentLevel]);
 
-  // Use ref to avoid re-triggering the main effect when state changes
-  const hasStartedRef = useRef(hasStarted);
-  useEffect(() => {
-    hasStartedRef.current = hasStarted;
-  }, [hasStarted]);
 
   // Handle global disconnect ONLY on unmount
   useEffect(() => {
@@ -213,14 +310,14 @@ export default function LearnPage() {
     };
   }, [ws.disconnect]);
 
-  const handleSendMessage = useCallback(async (textOverride?: string) => {
+  const handleSendMessage = useCallback(async (textOverride?: string, displayText?: string) => {
     const textToSend = typeof textOverride === 'string' ? textOverride : input;
 
     if (!textToSend.trim() || !ws.sessionId) return;
 
     const userMessage: Message = {
       role: "user",
-      text: textToSend,
+      text: displayText || textToSend,
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, userMessage]);
@@ -274,9 +371,12 @@ export default function LearnPage() {
     const unsubscribeStatus = ws.on("status", (event: any) => {
       if (event.difficulty_level) setCurrentLevel(event.difficulty_level);
       if (event.difficulty_title) setCurrentLevelTitle(event.difficulty_title);
+      // Refresh sidebar (titles/list) on any status change
+      setHistoryRefreshTrigger(prev => prev + 1);
     });
 
     const unsubscribeTeacherDelta = ws.on("teacher_text_delta", (event: any) => {
+      setIsLoading(false);
       currentTeacherTextRef.current += event.delta;
       setMessages((prev) => {
         const last = prev[prev.length - 1];
@@ -300,15 +400,19 @@ export default function LearnPage() {
 
     // Realtime board updates
     const unsubscribeBoardAction = ws.on("board_action", (event: any) => {
+      setIsLoading(false);
       if (event.action.kind === "SHOW_QUIZ") {
-        setQuizPayload(event.action.payload);
-        setIsQuizOpen(true);
+        // Handled by boardActions useEffect to prevent duplication
+        return;
       } else if (event.action.kind === "SHOW_REWARD") {
         console.log("REWARD ACTION RECEIVED:", event.action.payload);
         if (event.action.payload?.type === "LEVEL_UP") {
           setLevelUpAmount(event.action.payload.level || currentLevelRef.current + 1);
           setShowLevelUp(true);
         }
+      } else if (event.action.kind === "SHOW_FLASHCARDS") {
+        console.log("FLASHCARDS ACTION RECEIVED (Stream):", event.action.payload);
+        return; // Handled in teacher_text_final to avoid race/duplication
       } else {
         console.log("Realtime board action:", event.action);
         setBoardActions((prev) => {
@@ -351,33 +455,36 @@ export default function LearnPage() {
           }
           return prev;
         });
-        currentTeacherTextRef.current = "";
-        setIsSpeaking(false);
-
         // Check for quiz action in this very event to prevent race condition
-        const hasQuizAction = event.board_actions?.some((a: any) => a.kind === "SHOW_QUIZ");
+        const quizAction = event.board_actions?.find((a: any) => a.kind === "SHOW_QUIZ");
 
-        // Ensure we speak something even if streaming failed
-        // But ONLY if quiz is NOT open currently OR we just answered it (feedback)
-        // AND no new quiz arrived
-        if ((!isQuizOpenRef.current || isQuizAnsweredRef.current) && !hasQuizAction) {
+        if (quizAction && !isQuizOpenRef.current) {
+          console.log("Found quiz action in final event:", quizAction);
+          setQuizPayload(quizAction.payload);
+          setIsQuizOpen(true);
+          isQuizOpenRef.current = true;
+        }
+
+        // Check for flashcards action
+        const flashcardsAction = event.board_actions?.find((a: any) => a.kind === "SHOW_FLASHCARDS");
+        if (flashcardsAction && !isFlashcardsOpenRef.current) {
+          console.log("Found flashcards action in final event:", flashcardsAction);
+          setFlashcardPayload(flashcardsAction.payload);
+          setIsFlashcardsOpen(true);
+          isFlashcardsOpenRef.current = true;
+        }
+
+        // Check for streaming failure BEFORE resetting the ref
+        if ((!isQuizOpenRef.current || isQuizAnsweredRef.current) && !quizAction) {
           if (currentTeacherTextRef.current.length < 5 && event.text.length > 5) {
-            console.log("Streaming likely failed - relying on backend audio synthesis");
-            // tts.speak(event.text); // DISABLED browser voice for high-quality backend voice
-          } else {
-            // tts.finalizeSpeech(); // DISABLED browser voice
+            console.warn("Streaming buffer empty - relying on backend final text sync");
           }
         } else {
-          console.log("Quiz active or received - suppressing final speech");
-          // tts.stop(); // DISABLED browser voice command
+          console.log("Quiz active or received - suppressing final speech checks");
         }
 
         if (event.board_actions && event.board_actions.length > 0) {
           console.log("Received final board actions:", event.board_actions);
-          // Merge or overwrite? Usually final has everything or just the summary. 
-          // If we listened to realtime, we might duplicate if we just append.
-          // Let's replace if we have a full set, or just rely on realtime? 
-          // Learn.py sends ALL actions in final. So replacing is safer to ensure sync.
           setBoardActions(event.board_actions);
         }
         currentTeacherTextRef.current = "";
@@ -392,8 +499,9 @@ export default function LearnPage() {
 
     const unsubscribeDisconnected = ws.on("disconnected", () => {
       setIsLoading(false);
-      if (hasStartedRef.current) {
-        addSystemMessage("Connection lost. Attempting to reconnect...");
+      // If the session is lost (e.g. server restart), we should allow restarting
+      if (isMounted) {
+        addSystemMessage("Connection lost. If it doesn't reconnect, please refresh the page.", "info");
       }
     });
 
@@ -474,7 +582,14 @@ export default function LearnPage() {
         URL.revokeObjectURL(url);
       };
 
-      audio.play().catch(e => console.error("Error playing teacher voice:", e));
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(e => {
+          if (e.name !== 'AbortError') {
+            console.error("Error playing teacher voice:", e);
+          }
+        });
+      }
     });
 
     return () => unsubscribeAudio();
@@ -527,16 +642,28 @@ export default function LearnPage() {
     }
   };
 
-  const handleToggleVoice = () => {
+  const handleToggleVoice = async () => {
     if (!ws.connected) return;
 
     if (!isVoiceRecording) {
+      // Ensure mic is actually listening
+      if (!voice.isListening) {
+        console.log("Initializing microphone for manual recording...");
+        try {
+          await voice.startListening();
+        } catch (err) {
+          console.error("Failed to start mic:", err);
+          addSystemMessage("Could not access microphone. Please check permissions.", "error");
+          return;
+        }
+      }
+
       // START RECORDING
       setIsVoiceRecording(true);
       isVoiceRecordingRef.current = true;
 
       // Interrupt teacher if they are speaking
-      if (!isPaused) {
+      if (!isPaused || isSpeaking) {
         handleInterrupt();
       }
 
@@ -547,22 +674,41 @@ export default function LearnPage() {
       setIsVoiceRecording(false);
       isVoiceRecordingRef.current = false;
       setIsTranscribing(true);
+
+      // Release microphone resource immediately when stopping
+      voice.stopListening();
+
       ws.toggleVoice("stop");
-      console.log("Stopped manual voice recording, waiting for transcription");
+      console.log("Stopped manual voice recording, released mic, waiting for transcription");
     }
   };
 
   const uploadFile = async (file: File) => {
-    if (!ws.sessionId) return;
+    // Force new session creation for upload context
+    // This ensures we have a clean slate for the file discussion 
+    // as requested by the user ("je veux dans une nouvelle dsicussion")
 
     setIsUploading(true);
-    const formData = new FormData();
-    formData.append('file', file);
+    let targetSessionId = ws.sessionId;
 
     try {
+      // If we want a new session for every upload, we first Start Session
+      // Note: ws.startSession generates a new ID and connects
+      const newSessionId = await ws.startSession(lessonId, userId);
+      if (!newSessionId) {
+        throw new Error("Failed to start new session for file upload");
+      }
+
+      // Use the returned ID immediately to avoid race condition
+      targetSessionId = newSessionId;
+
+      // Now upload to this NEW session
+      const formData = new FormData();
+      formData.append('file', file);
+
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       const response = await fetch(
-        `${apiUrl}/api/v1/learn/session/${ws.sessionId}/upload-course`,
+        `${apiUrl}/api/v1/learn/session/${targetSessionId}/upload-course`,
         {
           method: 'POST',
           body: formData,
@@ -576,7 +722,11 @@ export default function LearnPage() {
 
       const result = await response.json();
       setUploadedFileName(file.name);
-      addSystemMessage(result.message || `Course file "${file.name}" uploaded successfully!`, "info");
+
+      // Clear UI messages for the clean slate (since we just started a session)
+      setMessages([]);
+      addSystemMessage(`New discussion started for document "${file.name}".`, "info");
+
     } catch (error) {
       console.error('File upload error:', error);
       addSystemMessage(
@@ -703,6 +853,18 @@ export default function LearnPage() {
 
       {/* Main Content */}
 
+      <StudyHubModal
+        isOpen={isStudyHubOpen}
+        onClose={() => setIsStudyHubOpen(false)}
+        quizzes={savedQuizzes}
+        flashcards={savedFlashcards}
+        onRestore={(action) => {
+          // Use the WebSocket hook's method to restore state
+          ws.restoreBoardAction(action);
+        }}
+        onDelete={handleDeleteArtifact}
+      />
+
       <QuizModal
         isOpen={isQuizOpen}
         payload={quizPayload}
@@ -710,22 +872,24 @@ export default function LearnPage() {
           setIsQuizOpen(false);
           isQuizOpenRef.current = false;
         }}
-        onAnswer={(correct) => {
-          console.log("Quiz result:", correct);
+        onAnswer={(score, total) => {
+          console.log(`Quiz completed. Score: ${score}/${total}`);
           isQuizAnsweredRef.current = true; // Allow speech for feedback
 
-          // Find correct option text
-          const correctIndex = quizPayload.correct_index;
-          const correctOptionText = quizPayload.options && quizPayload.options[correctIndex]
-            ? quizPayload.options[correctIndex]
-            : "Unknown";
+          // Send result to backend with context for motivating feedback
+          const percentage = (score / total) * 100;
+          let feedbackPrompt = "";
 
-          // Send result to backend with context
-          const resultMsg = correct
-            ? `[QUIZ_RESULT: CORRECT] Question: "${quizPayload.question}" Answer: "${correctOptionText}"`
-            : `[QUIZ_RESULT: INCORRECT] Question: "${quizPayload.question}" Correct Answer: "${correctOptionText}"`;
+          if (percentage >= 80) {
+            feedbackPrompt = `[QUIZ_COMPLETE] Excellent! User scored ${score}/${total} (${percentage}%). Please give a very heartfelt congratulations and encourage them to keep going. Speak at a normal, natural pace.`;
+          } else if (percentage >= 50) {
+            feedbackPrompt = `[QUIZ_COMPLETE] Good job. User scored ${score}/${total} (${percentage}%). Give them positive reinforcement and briefly mention one thing they could improve. If they missed any specific categories, mention them. Speak at a normal, natural pace.`;
+          } else {
+            feedbackPrompt = `[QUIZ_COMPLETE] Keep trying! User scored ${score}/${total} (${percentage}%). Provide warm encouragement, and write the correct answers for the topics they missed on the board. Explain that it's part of the process. Speak at a normal, natural pace.`;
+          }
 
-          ws.sendUserMessage(resultMsg);
+          setIsLoading(true);
+          ws.sendUserMessage(feedbackPrompt);
         }}
         currentLevel={currentLevel}
       />
@@ -748,7 +912,7 @@ export default function LearnPage() {
               onRemove={() => setUploadedFileName(null)}
               isUploading={isUploading}
               refreshTrigger={historyRefreshTrigger}
-              onSelectSession={(id) => {
+              onSelectSession={async (id) => {
                 if (id === ws.sessionId) return;
                 console.log("Switching to session:", id);
 
@@ -756,8 +920,19 @@ export default function LearnPage() {
                 tts.stop();
                 setIsSpeaking(false);
 
+                // Fetch session details to restore file state
+                try {
+                  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+                  const res = await fetch(`${apiUrl}/api/v1/learn/sessions/${id}`);
+                  if (res.ok) {
+                    const details = await res.json();
+                    setUploadedFileName(details.uploaded_file_name || null);
+                  }
+                } catch (error) {
+                  console.error("Failed to fetch session details:", error);
+                }
+
                 ws.connect(id);
-                setHasStarted(true);
                 setMessages([]);
                 setBoardActions([]);
               }}
@@ -773,6 +948,7 @@ export default function LearnPage() {
                 setMessages([]);
                 setBoardActions([]);
                 setIsQuizOpen(false);
+                setIsFlashcardsOpen(false);
                 setShowLevelUp(false);
                 // Correct signature: startSession(lessonId, userId)
                 // Backend will generate the session ID
@@ -782,7 +958,17 @@ export default function LearnPage() {
           </div>
 
           {/* CENTER COLUMN: Discussion (60%) */}
-          <div className="col-span-12 lg:col-span-6 h-full flex flex-col gap-6 overflow-hidden">
+          <div className="col-span-12 lg:col-span-6 h-full flex flex-col gap-6 overflow-hidden relative">
+            {/* Flashcard Modal */}
+            {isFlashcardsOpen && flashcardPayload && (
+              <FlashcardModal
+                cards={flashcardPayload.cards}
+                onClose={() => {
+                  setIsFlashcardsOpen(false);
+                  isFlashcardsOpenRef.current = false;
+                }}
+              />
+            )}
 
             {/* Avatar & Board Section (Top) */}
             <div className="h-[40%] flex gap-4 min-h-0">
@@ -850,25 +1036,22 @@ export default function LearnPage() {
                 )}
 
                 {messages.map((msg, idx) => (
-                  <div
+                  <ChatMessage
                     key={idx}
-                    className={cn(
-                      "flex w-full mb-4 animate-fadeIn",
-                      msg.role === "user" ? "justify-end" : "justify-start"
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "max-w-[85%] rounded-2xl px-5 py-3 shadow-sm text-sm leading-relaxed",
-                        msg.role === "user"
-                          ? "bg-primary text-primary-foreground rounded-tr-none"
-                          : "bg-surface/80 border border-border backdrop-blur-sm rounded-tl-none"
-                      )}
-                    >
-                      <p className="whitespace-pre-wrap">{msg.text}</p>
-                    </div>
-                  </div>
+                    role={msg.role}
+                    text={msg.text}
+                    isFinal={msg.isFinal}
+                  />
                 ))}
+
+                {/* Thinking Indicator */}
+                {isLoading && messages[messages.length - 1]?.role === "user" && (
+                  <ChatMessage
+                    role="teacher"
+                    text=""
+                    isFinal={false}
+                  />
+                )}
                 <div ref={messagesEndRef} />
               </div>
 
@@ -876,11 +1059,13 @@ export default function LearnPage() {
                 <div className="flex gap-2 items-center bg-surface/50 p-1.5 rounded-xl border border-white/10 shadow-inner">
                   <button
                     onClick={togglePause}
+                    disabled={!ws.connected}
                     className={cn(
                       "p-2.5 rounded-lg transition-all",
-                      isPaused
-                        ? "bg-yellow-500/20 text-yellow-500 hover:bg-yellow-500/30"
-                        : "hover:bg-white/5 text-muted-foreground"
+                      !ws.connected ? "opacity-30 cursor-not-allowed" :
+                        isPaused
+                          ? "bg-yellow-500/20 text-yellow-500 hover:bg-yellow-500/30"
+                          : "hover:bg-white/5 text-muted-foreground"
                     )}
                     title={isPaused ? "Resume" : "Pause"}
                   >
@@ -934,6 +1119,7 @@ export default function LearnPage() {
                     className="flex-1 bg-transparent border-none focus:ring-0 text-sm px-2 py-1"
                   />
 
+
                   <button
                     onClick={() => handleSendMessage()}
                     disabled={!input.trim() || !ws.connected}
@@ -945,13 +1131,28 @@ export default function LearnPage() {
               </div>
             </div>
 
+
           </div>
 
-          {/* RIGHT COLUMN: Studio (20%) */}
           <div className="col-span-12 lg:col-span-3 h-full overflow-hidden">
             <StudioSidebar
-              onAction={(text: string) => handleSendMessage(text)}
+              onAction={(text: string, label?: string) => handleSendMessage(text, label)}
+              onStartQuiz={() => {
+                setIsLoading(true);
+                setMessages((prev) => [...prev, { role: "user", text: "Start Quiz", timestamp: Date.now(), isFinal: true }]);
+                isQuizAnsweredRef.current = false;
+                isQuizOpenRef.current = false;
+                ws.requestQuiz();
+              }}
+              onStartFlashcards={() => {
+                setIsLoading(true);
+                setMessages((prev) => [...prev, { role: "user", text: "Flashcards", timestamp: Date.now(), isFinal: true }]);
+                isFlashcardsOpenRef.current = false;
+                ws.requestFlashcards();
+              }}
+              onOpenStudyHub={handleOpenStudyHub}
               disabled={!ws.connected || isLoading}
+              hasActiveUpload={!!uploadedFileName}
             />
           </div>
 
@@ -962,45 +1163,41 @@ export default function LearnPage() {
 
 
 
-      {/* Start Session Overlay */}
-      {
-        !hasStarted && (
-          <div className="absolute inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-surface border border-border rounded-xl p-8 max-w-md w-full text-center shadow-2xl">
-              <h2 className="text-2xl font-bold mb-4">Ready to Learn?</h2>
-              <p className="text-muted-foreground mb-8">
-                Click start to connect to your AI teacher and enable audio.
-              </p>
-              <div className="flex flex-col gap-3">
-                <button
-                  onClick={startLearning}
-                  className="w-full py-4 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl font-bold text-lg transition-transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
-                  suppressHydrationWarning
-                >
-                  <Play className="w-6 h-6 fill-current" />
-                  Start Session
-                </button>
+      {isQuizOpen && (
+        <QuizModal
+          isOpen={isQuizOpen}
+          onClose={() => setIsQuizOpen(false)}
+          onAnswer={(correct, total) => console.log("Quiz completed:", correct, total)}
+          payload={quizPayload}
+          currentLevel={1}
+        />
+      )}
 
-                <button
-                  onClick={() => {
-                    console.log("Testing audio...");
-                    tts.speak("Checking audio system. One, two, three.");
-                  }}
-                  className="w-full py-3 bg-secondary hover:bg-secondary/80 text-secondary-foreground rounded-xl font-medium flex items-center justify-center gap-2"
-                  suppressHydrationWarning
-                >
-                  <Volume2 className="w-5 h-5" />
-                  Test Audio (Click me first)
-                </button>
+      {isFlashcardsOpen && (
+        <FlashcardModal
+          cards={flashcardPayload?.cards || []}
+          onClose={() => setIsFlashcardsOpen(false)}
+        />
+      )}
 
-                <div className="text-xs text-muted-foreground mt-2 bg-muted/50 p-2 rounded">
-                  <p>Status: {tts.error ? `Error: ${tts.error}` : tts.isPlaying ? "Playing..." : "Ready"}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )
-      }
+      {showLevelUp && (
+        <LevelUpPopup
+          isVisible={showLevelUp}
+          onClose={() => setShowLevelUp(false)}
+          level={levelUpAmount}
+        />
+      )}
+
+      {isStudyHubOpen && (
+        <StudyHubModal
+          isOpen={isStudyHubOpen}
+          onClose={() => setIsStudyHubOpen(false)}
+          quizzes={savedQuizzes}
+          flashcards={savedFlashcards}
+          onRestore={handleRestoreFromStudyHub}
+          onDelete={handleDeleteArtifact}
+        />
+      )}
     </div >
   );
 }

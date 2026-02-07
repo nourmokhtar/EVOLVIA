@@ -9,6 +9,7 @@ Provides:
 
 from fastapi import APIRouter, WebSocket, Depends, HTTPException, WebSocketDisconnect, UploadFile, File, Form
 from typing import Optional
+from pydantic import BaseModel
 import uuid
 import json
 import logging
@@ -26,6 +27,14 @@ from app.schemas.learn import (
     ErrorEvent,
     SessionStatus,
     ToggleVoiceEvent,
+    RequestQuizEvent,
+    RequestFlashcardsEvent,
+    HistoryEvent,
+    VoiceTranscriptionEvent,
+    BoardActionEvent,
+    TeacherTextDeltaEvent,
+    TeacherTextFinalEvent,
+    BoardActionKind,
 )
 from app.services.learn_session import LearnSessionManager, LearnSession
 from app.services.learn_llm import LearnLLMService
@@ -54,6 +63,7 @@ async def start_session(event: StartLessonEvent):
     Returns: session_id for use in subsequent events
     """
     logger.info("🔄 Received start_session request")
+    logger.error(f"🚨🚨 START SESSION CALLED 🚨🚨 Payload: {event}")
     session_id = str(uuid.uuid4())
     logger.info(f"🔄 Generated session_id: {session_id}")
 
@@ -152,6 +162,18 @@ async def upload_course_file(
     # Store in session
     session.uploaded_file_content = extracted_text
     session.uploaded_file_name = file.filename
+    session.uploaded_file_bytes = file_content  # Store raw bytes for persistence
+    
+    # Persist changes
+    # Set custom title from filename if not already set or generic
+    if file.filename and (not session.custom_title or session.custom_title in ["Session", "Current Session", "New Discussion"]):
+        import os
+        name = os.path.splitext(file.filename)[0]
+        # Clean up name: replace underscore/hyphen with space, title case
+        name = name.replace("_", " ").replace("-", " ").title()
+        session.custom_title = name
+
+    session_manager.update_session(session)
     
     logger.info(f"✅ Course file uploaded and extracted ({len(extracted_text)} characters)")
     
@@ -176,10 +198,152 @@ async def list_sessions():
             "created_at": s.created_at.isoformat(),
             "difficulty": s.difficulty_title,
             "turns": len(s.history),
-            "summary": s.title
+            "summary": s.title,
+            "uploaded_file_name": s.uploaded_file_name
         }
         for s in sessions
     ]
+
+
+@router.get("/learn/sessions/{session_id}")
+async def get_session_details(session_id: str):
+    """Get detailed state for a specific session"""
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Process artifacts to include metadata needed for frontend (delete/display)
+    quizzes_enriched = []
+    if session.quizzes:
+        for idx, q in enumerate(session.quizzes):
+            q_meta = dict(q)
+            q_meta["session_id"] = session.session_id
+            q_meta["original_index"] = idx
+            q_meta["source_title"] = session.custom_title or session.title
+            quizzes_enriched.append(q_meta)
+
+    flashcards_enriched = []
+    if session.flashcards:
+        for idx, f in enumerate(session.flashcards):
+            f_meta = dict(f)
+            f_meta["session_id"] = session.session_id
+            f_meta["original_index"] = idx
+            f_meta["source_title"] = session.custom_title or session.title
+            flashcards_enriched.append(f_meta)
+
+    return {
+        "session_id": session.session_id,
+        "lesson_id": session.lesson_id,
+        "created_at": session.created_at.isoformat(),
+        "difficulty": session.difficulty_level,
+        "difficulty_title": session.difficulty_title,
+        "language": session.language,
+        "uploaded_file_name": session.uploaded_file_name,
+        "has_uploaded_file": session.uploaded_file_bytes is not None,
+        "turns": len(session.history),
+        "summary": session.title,
+        "quizzes": quizzes_enriched,
+        "flashcards": flashcards_enriched
+    }
+
+
+@router.get("/learn/study-hub-items")
+async def get_all_study_hub_items():
+    """
+    Aggregate all quizzes and flashcards from all sessions.
+    
+    Returns:
+    {
+        "quizzes": [ { ...quiz_data, "source_title": "Spark", "session_id": "..." }, ... ],
+        "flashcards": [ { ...fc_data, "source_title": "Course 1", "session_id": "..." }, ... ]
+    }
+    """
+    sessions = session_manager.list_sessions()
+    
+    all_quizzes = []
+    all_flashcards = []
+    
+    # Generic title patterns to replace
+    generic_titles = ["Session", "Current Session", "New Discussion", "Nouvelle Discussion"]
+    
+    for i, s in enumerate(sessions):
+        # Determine display title
+        title = s.custom_title
+        if not title or title in generic_titles:
+            # Fallback for generic titles: "Course X"
+            # Since sessions are often ordered by activity, assignment of numbers might fluctuate if we sort by date.
+            # But "Course {i}" (where i is index) is a simple way to differentiate.
+            # Ideally we'd use consistent ID-based numbering but for now this matches user request "Course 1, Course 2"
+            title = f"Course {len(sessions) - i}" # Reverse index so oldest is Course 1? Or just arbitrary.
+            
+            # Use uploaded file name if available and title is generic
+            if s.uploaded_file_name:
+                import os
+                name = os.path.splitext(s.uploaded_file_name)[0]
+                 # Clean up name: replace underscore/hyphen with space, title case
+                name = name.replace("_", " ").replace("-", " ").title()
+                title = name
+
+        # Collect Quizzes
+        if s.quizzes:
+            for idx, q in enumerate(s.quizzes):
+                # Inject source metadata
+                q_with_meta = dict(q)
+                q_with_meta["source_title"] = title
+                q_with_meta["session_id"] = s.session_id
+                q_with_meta["original_index"] = idx
+                all_quizzes.append(q_with_meta)
+                
+        # Collect Flashcards
+        if s.flashcards:
+            for idx, f in enumerate(s.flashcards):
+                f_with_meta = dict(f)
+                f_with_meta["source_title"] = title
+                f_with_meta["session_id"] = s.session_id
+                f_with_meta["original_index"] = idx
+                all_flashcards.append(f_with_meta)
+                
+    return {
+        "quizzes": all_quizzes,
+        "flashcards": all_flashcards
+    }
+
+
+@router.delete("/learn/sessions/{session_id}/artifacts")
+async def delete_session_artifact(session_id: str, type: str, index: int):
+    """
+    Delete a specific artifact (quiz or flashcard) from a session.
+    type: 'quiz' or 'flashcards'
+    index: 0-based index in the list
+    """
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session = session_manager.get_session(session_id)
+    
+    try:
+        if type == "quiz":
+            if 0 <= index < len(session.quizzes):
+                session.quizzes.pop(index)
+                session_manager.update_session(session)
+                return {"status": "success", "message": "Quiz deleted"}
+            else:
+                 raise HTTPException(status_code=400, detail="Invalid index")
+        
+        elif type == "flashcards":
+            if 0 <= index < len(session.flashcards):
+                session.flashcards.pop(index)
+                session_manager.update_session(session)
+                return {"status": "success", "message": "Flashcards deleted"}
+            else:
+                raise HTTPException(status_code=400, detail="Invalid index")
+        
+        else:
+             raise HTTPException(status_code=400, detail="Invalid artifact type")
+             
+    except Exception as e:
+        logger.error(f"Error deleting artifact: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/learn/sessions/{session_id}")
@@ -190,6 +354,22 @@ async def delete_session(session_id: str):
         # We might return 404, but for now just 200 with result is fine or just 200
         pass
     return {"status": "success", "deleted": success}
+
+
+class RenameSessionRequest(BaseModel):
+    title: str
+
+@router.patch("/learn/sessions/{session_id}")
+async def rename_session(session_id: str, body: RenameSessionRequest):
+    """Rename a session"""
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session = session_manager.get_session(session_id)
+    session.custom_title = body.title
+    session_manager.update_session(session)
+    
+    return {"status": "success", "session_id": session_id, "new_title": session.title}
 
 
 # ============================================================================
@@ -231,7 +411,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
         # Send history if available
         if session.history:
-            from app.schemas.learn import HistoryEvent
             logger.info(f"Sending history for session {session_id} ({len(session.history)} items)")
             await _send_event(
                 websocket,
@@ -262,12 +441,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     
                     if event.action == "start":
                         voice_manager.start_recording()
+                        continue
                     elif event.action == "stop":
                         transcribed_text = await voice_manager.end_recording(
-                            language=None # Let Whisper auto-detect spoken language
+                            language=session.language
                         )
                         logger.info(f"Manual Voice input captured: '{transcribed_text}'")
-                        from app.schemas.learn import VoiceTranscriptionEvent
                         await _send_event(
                             websocket,
                             VoiceTranscriptionEvent(
@@ -276,6 +455,81 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             )
                         )
                         continue
+                elif event_type == "REQUEST_QUIZ":
+                    event = RequestQuizEvent(**event_data)
+                    logger.info(f"Quiz requested for session {session_id}")
+                    
+                    # Generate quiz response
+                    lesson_context = session.uploaded_file_content or ""
+                    
+                    response = await llm_service.generate_quiz_response(
+                        session_id=session.session_id,
+                        lesson_context=lesson_context,
+                        student_input="[USER REQUESTED QUIZ]",
+                        difficulty_level=session.difficulty_level,
+                        history=session.history,
+                        session_language=session.language,
+                    )
+                    
+                    # Stream response (Speech + Quiz Action)
+                    # 1. Start Audio Synthesis
+                    async def get_audio():
+                        try:
+                            return await voice_manager.synthesize_response(
+                                response.speech_text, 
+                                language=response.language
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to synthesize audio: {e}")
+                            return None
+                    audio_task = asyncio.create_task(get_audio())
+
+                    # 2. Send Board Actions (The Quiz)
+                    for action in response.board_actions:
+                        await _send_event(
+                            websocket,
+                            BoardActionEvent(
+                                session_id=session.session_id,
+                                action=action,
+                            ),
+                        )
+                        # PERSIST ARTIFACTS (Fix for manual Quiz Request)
+                        if action.kind == BoardActionKind.SHOW_QUIZ:
+                             session.quizzes.append(action.payload)
+                             session_manager.update_session(session)
+
+                    # 3. Text Delta
+                    words = response.speech_text.split()
+                    for word in words:
+                        await _send_event(
+                            websocket,
+                            TeacherTextDeltaEvent(
+                                session_id=session.session_id,
+                                delta=word + " ",
+                            ),
+                        )
+                        await asyncio.sleep(0.05)
+
+                    # 4. Final Event
+                    audio_data = await audio_task
+                    await _send_event(
+                        websocket,
+                        TeacherTextFinalEvent(
+                            session_id=session.session_id,
+                            text=response.speech_text,
+                            board_actions=response.board_actions,
+                        ),
+                    )
+                    
+                    if audio_data:
+                        await websocket.send_bytes(audio_data)
+
+                    continue
+
+                elif event_type == "REQUEST_FLASHCARDS":
+                    event = RequestFlashcardsEvent(**event_data)
+                    logger.info(f"Flashcards requested for session {session_id}")
+
                 else:
                     await _send_event(
                         websocket,
@@ -302,7 +556,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 
                 transcribed_text = await voice_manager.add_audio_chunk(
                     audio_chunk, 
-                    language=None # Let Whisper auto-detect
+                    language=session.language
                 )
                 
                 if transcribed_text:
@@ -362,7 +616,9 @@ async def _handle_event(
             difficulty_level=session.difficulty_level,
             interruption_count=session.interruption_count,
             has_uploaded_file=bool(session.uploaded_file_content),
+
             history=session.history,
+            session_language=session.language,
         )
         
         session.continue_teaching()
@@ -501,7 +757,9 @@ async def _handle_websocket_event(
                 difficulty_level=session.difficulty_level,
                 interruption_count=session.interruption_count,
                 has_uploaded_file=bool(session.uploaded_file_content),
+
                 history=session.history,
+                session_language=session.language,
             )
 
 
@@ -522,7 +780,6 @@ async def _handle_websocket_event(
             # 2. Stream speech as deltas
             words = response.speech_text.split()
             for word in words:
-                from app.schemas.learn import TeacherTextDeltaEvent
                 await _send_event(
                     websocket,
                     TeacherTextDeltaEvent(
@@ -534,7 +791,7 @@ async def _handle_websocket_event(
             
             # 3. Send board actions
             for action in response.board_actions:
-                from app.schemas.learn import BoardActionEvent
+                logger.info(f"📤 Sending Board Action to frontend: {action.kind} | Payload: {action.payload}")
                 await _send_event(
                     websocket,
                     BoardActionEvent(
@@ -542,12 +799,19 @@ async def _handle_websocket_event(
                         action=action,
                     ),
                 )
+
+                # PERSIST ARTIFACTS
+                if action.kind == BoardActionKind.SHOW_QUIZ:
+                    session.quizzes.append(action.payload)
+                    session_manager.update_session(session)
+                elif action.kind == BoardActionKind.SHOW_FLASHCARDS:
+                    session.flashcards.append(action.payload)
+                    session_manager.update_session(session)
             
             # 4. Wait for audio to be ready
             audio_data = await audio_task
             
             # 5. Send final speech event
-            from app.schemas.learn import TeacherTextFinalEvent
             await _send_event(
                 websocket,
                 TeacherTextFinalEvent(
@@ -561,14 +825,37 @@ async def _handle_websocket_event(
             if audio_data:
                 await websocket.send_bytes(audio_data)
             
+            # --- Automatic Titling ---
+            # Generate a title if it's the first exchange OR if title is generic
+            is_generic_title = not session.custom_title or session.custom_title in ["Session", "Current Session", "New Discussion"]
+            if is_generic_title and not getattr(response, 'quiz', False):
+                try:
+                    logger.info(f"Generating automatic title for session {session.session_id}")
+                    new_title = await llm_service.generate_title(session.history)
+                    if new_title and new_title not in ["New Discussion", "Nouvelle Discussion"]:
+                        session.custom_title = new_title
+                        session_manager.update_session(session)
+                        # Send status to trigger sidebar refresh
+                        await _send_event(
+                            websocket,
+                            StatusEvent(
+                                session_id=session.session_id,
+                                status=session.status,
+                                message=f"Session titled: {new_title}"
+                            )
+                        )
+                except Exception as title_err:
+                    logger.error(f"Failed to generate title: {title_err}")
+            
             # Add teacher response to history
             session.add_history("assistant", response.speech_text)
             
             # Record checkpoint
             session.continue_teaching()
             session.next_step()
+            # Clean summary without "Discussed:" prefix
             checkpoint = session.set_checkpoint(
-                summary=f"Discussed: {event.text[:50]}..."
+                summary=event.text[:50] + "..." if len(event.text) > 50 else event.text
             )
             await _send_event(websocket, checkpoint)
         
@@ -623,6 +910,179 @@ async def _handle_websocket_event(
         elif isinstance(event, ToggleVoiceEvent):
             # Already handled in the main loop, just ignore here to avoid fallthrough error
             pass
+        
+        elif isinstance(event, RequestQuizEvent):
+            logger.info(f"Student requested a quiz for session {session.session_id}")
+            session.wait_for_answer()
+            
+            # Send status update
+            await _send_event(
+                websocket,
+                StatusEvent(
+                    session_id=session.session_id,
+                    status=SessionStatus.ANSWERING,
+                    difficulty_level=session.difficulty_level,
+                    difficulty_title=session.difficulty_title,
+                ),
+            )
+            
+            # Generate quiz response
+            lesson_context = session.uploaded_file_content or ""
+            response = await llm_service.generate_quiz_response(
+                session_id=session.session_id,
+                difficulty_level=session.difficulty_level,
+                lesson_context=lesson_context,
+                history=session.history,
+                target_language=session.language or "english"
+            )
+            
+            # Send status: TEACHING
+            await _send_event(
+                websocket,
+                StatusEvent(
+                    session_id=session.session_id,
+                    status=SessionStatus.TEACHING,
+                    difficulty_level=session.difficulty_level,
+                    difficulty_title=session.difficulty_title,
+                ),
+            )
+            
+            # 1. Synthesize fixed speech immediately
+            try:
+                audio_data = await voice_manager.synthesize_response(
+                    response.speech_text, 
+                    language=response.language
+                )
+            except Exception as e:
+                logger.error(f"Failed to synthesize quiz intro audio: {e}")
+                audio_data = None
+
+            # 2. Stream speech deltas
+            words = response.speech_text.split()
+            for word in words:
+                await _send_event(
+                    websocket,
+                    TeacherTextDeltaEvent(
+                        session_id=session.session_id,
+                        delta=word + " ",
+                    ),
+                )
+                await asyncio.sleep(0.05)
+
+            # 3. Send board actions (The Quiz)
+            for action in response.board_actions:
+                await _send_event(
+                    websocket,
+                    BoardActionEvent(
+                        session_id=session.session_id,
+                        action=action,
+                    ),
+                )
+
+                # PERSIST ARTIFACTS
+                if action.kind == BoardActionKind.SHOW_QUIZ:
+                    session.quizzes.append(action.payload)
+                    session_manager.update_session(session)
+                elif action.kind == BoardActionKind.SHOW_FLASHCARDS:
+                    session.flashcards.append(action.payload)
+                    session_manager.update_session(session)
+
+            # 4. Send final speech event
+            await _send_event(
+                websocket,
+                TeacherTextFinalEvent(
+                    session_id=session.session_id,
+                    text=response.speech_text,
+                    board_actions=response.board_actions,
+                ),
+            )
+
+            # 5. Send audio binary
+            if audio_data:
+                await websocket.send_bytes(audio_data)
+
+        elif isinstance(event, RequestFlashcardsEvent):
+            logger.info(f"Student requested flashcards for session {session.session_id}")
+            session.wait_for_answer()
+            
+            # Send status update
+            await _send_event(
+                websocket,
+                StatusEvent(
+                    session_id=session.session_id,
+                    status=SessionStatus.TEACHING,
+                    difficulty_level=session.difficulty_level,
+                    difficulty_title=session.difficulty_title,
+                ),
+            )
+            
+            # Generate flashcards response
+            lesson_context = session.uploaded_file_content or ""
+            response = await llm_service.generate_flashcards_response(
+                session_id=session.session_id,
+                difficulty_level=session.difficulty_level,
+                lesson_context=lesson_context,
+                history=session.history,
+                session_language=session.language or "english"
+            )
+            
+            # 1. Synthesize fixed speech immediately
+            try:
+                audio_data = await voice_manager.synthesize_response(
+                    response.speech_text, 
+                    language=response.language
+                )
+            except Exception as e:
+                logger.error(f"Failed to synthesize flashcards intro audio: {e}")
+                audio_data = None
+
+            # 2. Stream speech deltas
+            words = response.speech_text.split()
+            for word in words:
+                await _send_event(
+                    websocket,
+                    TeacherTextDeltaEvent(
+                        session_id=session.session_id,
+                        delta=word + " ",
+                    ),
+                )
+                await asyncio.sleep(0.05)
+
+            # 3. Send board actions (The Flashcards)
+            for action in response.board_actions:
+                await _send_event(
+                    websocket,
+                    BoardActionEvent(
+                        session_id=session.session_id,
+                        action=action,
+                    ),
+                )
+
+                # PERSIST ARTIFACTS (with deduplication)
+                if action.kind == BoardActionKind.SHOW_FLASHCARDS:
+                    is_duplicate = any(f.get('cards') == action.payload.get('cards') for f in session.flashcards)
+                    if not is_duplicate:
+                        session.flashcards.append(action.payload)
+                        session_manager.update_session(session)
+
+            # 4. Send final speech event
+            await _send_event(
+                websocket,
+                TeacherTextFinalEvent(
+                    session_id=session.session_id,
+                    text=response.speech_text,
+                    board_actions=response.board_actions,
+                ),
+            )
+
+            # 5. Send audio binary
+            if audio_data:
+                await websocket.send_bytes(audio_data)
+
+            # No automatic titling for quiz-only turns
+            session.add_history("assistant", response.speech_text)
+            session.continue_teaching()
+            session.next_step()
         
         else:
             await _send_event(

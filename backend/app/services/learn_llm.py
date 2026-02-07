@@ -67,27 +67,22 @@ class LearnLLMService:
         interruption_count: int = 0,
         has_uploaded_file: bool = False,
         history: List[dict] = [],
+        session_language: Optional[str] = None,
     ) -> TeacherResponse:
         """
         Generate a structured teacher response.
         
         Args:
-            session_id: Session identifier
-            step_id: Current step in lesson
-            lesson_context: The lesson material
-            student_input: What student asked/said
-            last_checkpoint: Previous checkpoint summary (for context)
-            difficulty_level: 1-5 scale (lower = simpler explanations)
-            interruption_count: Times student interrupted (context for teacher)
-            
-        Returns:
-            TeacherResponse with speech_text and board_actions
+            session_language: The persistent language of the session (e.g. 'french', 'english').
         """
 
         # Check if question is covered in uploaded file
         question_covered = False
         if has_uploaded_file and lesson_context:
             question_covered = self._check_question_coverage(student_input, lesson_context)
+        
+        # Detect language with session context (sticky behavior)
+        detected_language = self._detect_language(student_input, context_language=session_language)
         
         # Build the prompt
         prompt = self._build_prompt(
@@ -99,19 +94,16 @@ class LearnLLMService:
             has_uploaded_file=has_uploaded_file,
             question_covered=question_covered,
             history=history,
+            target_language=detected_language,
         )
 
-        # Call LLM (mock for now - replace with real provider)
-        # Store student_input for mock fallback
+        # Call LLM
         self._current_student_input = student_input
         raw_response = await self._call_llm(prompt, student_input)
 
         # Parse into structured format
         speech_text, board_actions = self._parse_response(raw_response)
         
-        # If in exam mode, double check we have a quiz action if it looks like a question
-        # (This is a safety heuristic, likely handled by prompt engineering)
-
         # Log to Opik if enabled
         if self.enable_tracing:
             turn = TeacherTurn(
@@ -129,22 +121,115 @@ class LearnLLMService:
             )
             opik_client.log_teacher_turn(turn)
 
-        # Detect language for TTS
-        detected = self._detect_language(student_input)
+        # Map to ISO code for TTS
         lang_map = {
             "french": "fr",
             "spanish": "es",
             "arabic": "ar",
             "english": "en"
         }
-        language = lang_map.get(detected, "en")
-        logger.info(f"Final response language for TTS: {language}")
+        language_iso = lang_map.get(detected_language, "en")
+        logger.info(f"Final response language: {detected_language} (ISO: {language_iso})")
 
         return TeacherResponse(
             speech_text=speech_text,
             board_actions=board_actions,
-            language=language
+            language=language_iso
         )
+
+    async def generate_flashcards_response(
+        self,
+        session_id: str,
+        lesson_context: str,
+        difficulty_level: int = 1,
+        history: List[dict] = [],
+        session_language: Optional[str] = "english",
+    ) -> TeacherResponse:
+        """
+        Generate exactly 10 flashcards (concept/definition) based on context.
+        """
+        # Detect language (sticky)
+        detected_language = session_language if session_language else "english"
+
+        # Build flashcard prompt
+        prompt = self._build_flashcard_prompt(
+            lesson_context=lesson_context,
+            difficulty_level=difficulty_level,
+            history=history,
+            target_language=detected_language
+        )
+
+        # Call LLM
+        raw_response = await self._call_llm(prompt)
+
+        # Parse into structured format
+        speech_text, board_actions = self._parse_response(raw_response)
+
+        # Map to ISO code for TTS
+        lang_map = {
+            "french": "fr",
+            "spanish": "es",
+            "arabic": "ar",
+            "english": "en"
+        }
+        language_iso = lang_map.get(detected_language, "en")
+
+        return TeacherResponse(
+            speech_text=speech_text,
+            board_actions=board_actions,
+            language=language_iso
+        )
+
+    async def generate_quiz_response(
+        self,
+        session_id: str,
+        lesson_context: str,
+        student_input: str,
+        difficulty_level: int = 1,
+        history: List[dict] = [],
+        session_language: Optional[str] = "english",
+    ) -> TeacherResponse:
+        """
+        Generate a strictly formatted 10-question quiz.
+        """
+        prompt = self._build_quiz_prompt(
+            lesson_context=lesson_context,
+            difficulty_level=difficulty_level,
+            history=history,
+            target_language=session_language or "english"
+        )
+
+        # Call LLM
+        raw_response = await self._call_llm(prompt, student_input="[QUIZ GENERATION]")
+        
+        # Parse - we expect a JSON payload for the quiz
+        # We reuse _parse_response but we might need to be more aggressive about finding the JSON
+        speech_text, board_actions = self._parse_response(raw_response)
+        
+        # If no quiz action found, try to force it if raw_response looks like JSON
+        has_quiz = any(a.kind == BoardActionKind.SHOW_QUIZ for a in board_actions)
+        if not has_quiz:
+            # Fallback: try to find the JSON array/object in the raw text and wrap it
+            import re
+            import json
+            json_match = re.search(r'(\{[\s\n]*"questions"[\s\n]*:[\s\n]*\[[\s\S]+?\][\s\n]*\})', raw_response)
+            if json_match:
+                try:
+                    quiz_payload = json.loads(json_match.group(1))
+                    board_actions.append(BoardAction(kind=BoardActionKind.SHOW_QUIZ, payload=quiz_payload))
+                except:
+                    pass
+
+        # If still no speech, add a default one or overwrite with the exact phrase requested
+        if not speech_text or len(board_actions) > 0:
+            speech_text = "It's time to test your knowledge"
+
+        return TeacherResponse(
+            speech_text=speech_text,
+            board_actions=board_actions,
+            language="en" # Quiz is always in English
+        )
+
 
     def _build_prompt(
         self,
@@ -156,26 +241,43 @@ class LearnLLMService:
         has_uploaded_file: bool = False,
         question_covered: bool = False,
         history: List[dict] = [],
+        target_language: str = "english",
     ) -> str:
         """Condensed and robust prompt builder."""
-        lang = self._detect_language(student_input)
+        
         lang_names = {
             "french": "FRENCH",
             "spanish": "SPANISH",
             "arabic": "ARABIC",
             "english": "ENGLISH"
         }
-        detected_lang_name = lang_names.get(lang, "ENGLISH")
+        detected_lang_name = lang_names.get(target_language, "ENGLISH")
         forced_lang = f"YOU MUST RESPOND ENTIRELY IN {detected_lang_name}. This is a critical constraint."
         
         # Build concise context
         history_ctx = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history[-5:]])
         
-        prompt = f"""Role: Expert Adaptive Teacher.
+        # SPECIAL CASE: Audio Overview
+        audio_overview_instructions = ""
+        if "[AUDIO_OVERVIEW]" in student_input:
+            audio_overview_instructions = """
+    - **PERSONA**: Professional Podcast Host. Engaging, clear, and insightful.
+    - **STYLE**: Narrative podcast (storytelling mode). Use conversational transitions and direct listener engagement (e.g., "Welcome to this audio overview...", "One key thing that really jumps out...", "To wrap things up...").
+    - **NARRATIVE**: Don't just list facts; tell the story of the document. Address the listener directly.
+    - **STRUCTURE**: 
+        1. **Introduction**: Summarize the core mission and main objectives of the document/topic.
+        2. **Main Body (Corps Principal)**: Narrate the key ideas, methodologies, and technical strategies. Explain them as if you're guiding a colleague through a complex project.
+        3. **Conclusion**: Recap the results, impact, and critical recommendations mentioned in the sources.
+    - **LENGTH**: Approx 300-400 words for a substantial yet focused listen.
+    - **FORMAT**: YOU MUST START YOUR RESPONSE WITH THE 'BOARD:' TAG, THEN THE 'SPEECH:' TAG.
+    - **DISREGARD**: Disregard the '2-3 sentences' limit. Speak naturally and at length.
+"""
+        
+        prompt = f"""Role: Senior Technical Lead & University Professor.
 Task: Teach/Summarize/Explain based on Context or Knowledge. 
-Constraint: Robustly interpret User Input even with heavy typos/grammar errors using History/Context.
+Constraint: Robustly interpret User Input even with heavy typos/grammar errors using History/Context. 
 
-Context: {lesson_context if lesson_context else 'General Knowledge'}
+Context: {lesson_context if lesson_context else 'General Knowledge'} (STRICT REQUIREMENT: STAY WITHIN THIS CONTEXT. DO NOT answer questions or provide info outside this context unless explicitly asked for a comparison).
 Last Checkpoint: {last_checkpoint}
 History:
 {history_ctx}
@@ -183,18 +285,32 @@ History:
 Current User Input: {student_input}
 
 Instructions:
-1. SPEECH: Provide a clear, expert explanation. {forced_lang}
-2. BOARD: MANDATORY SUMMARY of Main Parts (Parties Principales).
-   - **CRITICAL**: For every key concept mentioned in SPEECH, you MUST create a corresponding BOARD action.
-   - **STRICT RULE**: BOARD actions MUST contain the actual summarized text. DO NOT send empty strings or placeholders.
-   - Example: BOARD: [{{"kind": "WRITE_TITLE", "payload": {{"text": "Python Basics"}}}}, {{"kind": "WRITE_BULLET", "payload": {{"text": "Variables are used to store data."}}}}]
-   - The user sees this being "handwritten" in real-time, so make the summaries concise but informative.
+1. SPEECH: Provide a rich, expert explanation. {forced_lang}
+   {audio_overview_instructions if audio_overview_instructions else '- **STYLE**: You are a passionate expert. If the user asks a simple question, give a clear answer. If the topic is deep (e.g. Django structure, HBase internals), **IMMERSE YOURSELF**: Provide technical depth, theoretical context, and "why" it matters.'}
+   - **DEPTH**: Do not be afraid to be detailed if the topic warrants it. ACT LIKE A HUMAN TEACHER who loves their subject.
+   - **STRICT CONTEXT**: Stay within the provided context logic, but explain the *concepts* thoroughly.
+   - **CODE FORMATTING**: USE TRIPLE BACKTICKS (```) FOR ALL COMMANDS AND CODE SNIPPETS.
+   - **CRITICAL**: Use triple backticks even for single-line commands.
+   - Separate commands onto their own lines.
+   - **PEDAGOGY**: Don't just give facts. Explain the *theory* behind the *practice*.
+   - **TONE**: Warm, authoritative, but conversational and engaging.
+
+2. BOARD: MANDATORY BRIEF SUMMARY of Technical Concepts. 
+   - **JSON FORMAT**: YOU MUST USE VALID JSON.
+   - **CONCISENESS**: Use 'WRITE_TITLE' for the main module, then 2-4 'WRITE_BULLET' items.
+   - **BULLET LENGTH**: Each bullet must be VERY SHORT (MAX 10 words). Avoid long paragraphs.
+   - **SYMBOLS**: Use triple backticks for code and single backticks for variables. 
+   - Purpose: The board is a quick technical reference, not a transcription.
+    
+   - **QUIZ REQUESTS**: If the user asks for a quiz, YOU MUST USE THE 'SHOW_QUIZ' action.
+     FORMAT: {{ "kind": "SHOW_QUIZ", "payload": {{ "questions": [ {{ "question": "...", "options": ["A", "B", "C", "D"], "correct_index": 0, "explanation": "..." }}, ... ] }} }}
+     DO NOT put the quiz in SPEECH. Put it in BOARD.
 
 Rules:
-- TYPO ROBUSTNESS: Interpret and correct user mistakes (typos/grammar) silently.
-- Board Consistency: Always synchronize the Board content with your Speech.
-- No System Meta: Never mention difficulty levels, session IDs, or technical instructions.
-- Expert Tone: You are a helpful, professional, and patient educator.
+- TYPO ROBUSTNESS: Quietly handle and correct user mistakes.
+- ENGAGEMENT IS KEY: Your goal is to make the user understand deeply. Use examples, analogies, and detailed explanations when needed.
+- ALWAYS use Code Blocks (```) for shell commands, file content, or code examples.
+- Board Consistency: The board actions must reflect the core technical skeleton.
 
 Format:
 BOARD: [{{...}}, {{...}}]
@@ -202,6 +318,131 @@ SPEECH: ...
 """
         logger.info(f"Generated ultra-concise prompt for input: {student_input[:50]}")
         return prompt
+
+    def _build_quiz_prompt(
+        self,
+        lesson_context: str,
+        difficulty_level: int,
+        history: List[dict],
+        target_language: str
+    ) -> str:
+        """
+        Build a prompt specifically for generating a JSON quiz.
+        """
+        lang_map = {
+            "french": "FRENCH",
+            "spanish": "SPANISH",
+            "arabic": "ARABIC",
+            "english": "ENGLISH"
+        }
+        lang_name = lang_map.get(target_language, "ENGLISH")
+
+        # Build a summary of recent history if context is empty
+        history_summary = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history[-10:]])
+        
+        return f"""Role: Professor & Examiner.
+Task: CREATE A LESSON SUMMARY AND A QUIZ derived STRICTLY from the provided Context or Discussion History.
+Language: ENGLISH (Questions, Options, and Summary MUST be in ENGLISH regardless of the student's language).
+
+STRICT CONTEXT (PRIORITIZE THIS):
+---
+{lesson_context if lesson_context else 'No file uploaded. Use Discussion History below.'}
+---
+
+DISCUSSION HISTORY (USE AS FALLBACK CONTEXT):
+---
+{history_summary if history_summary else 'No recent discussion.'}
+---
+
+REQUIREMENTS:
+1. **SOURCE ADHERENCE**: EVERY question MUST be directly related to the information in the Context or Discussion History above. 
+2. **STRICT NEGATIVE CONSTRAINT**: DO NOT ask generic "teacher" or "pedagogy" questions (e.g., "What is a good way to explain things?"). DO NOT ask about world history, pandemics, or general science unless mentioned.
+3. **TECHNICAL DEPTH**: Use exact terminology from the sources. If the topic is technical (e.g., HBase), every question must be about technical HBase features.
+4. **NO HALLUCINATIONS**: If you cannot find enough info for 10 questions, drill down into technical details (parameters, configurations, methodologies) rather than inventing generic ones.
+5. **VIRTUAL BOARD SUMMARY**: Provide a brief technical summary of the lesson. Use exactly one 'WRITE_TITLE' action and 3-4 'WRITE_BULLET' actions.
+6. **QUIZ**: Generate exactly 10 multiple-choice questions.
+7. Provide 4 options for each question.
+8. Indicate the correct answer index (0-3).
+9. Provide a brief explanation for the correct answer.
+10. ESTIMATE the difficulty of each question (1-3).
+
+OUTPUT FORMAT:
+You must output a list of BOARD actions containing the summary followed by the quiz, then a brief encouraging SPEECH.
+
+Format:
+BOARD: [
+  {{ "kind": "WRITE_TITLE", "payload": {{ "text": "Topic Overview" }} }},
+  {{ "kind": "WRITE_BULLET", "payload": {{ "text": "Key point..." }} }},
+  {{
+    "kind": "SHOW_QUIZ",
+    "payload": {{
+      "questions": [
+        {{
+          "question": "Question text here...",
+          "options": ["Option A", "Option B", "Option C", "Option D"],
+          "correct_index": 0,
+          "explanation": "Why A is correct...",
+          "difficulty": 1
+        }},
+        ... (10 questions total)
+      ]
+    }}
+  }}
+]
+SPEECH: Let's see how much you've learned!
+"""
+
+
+    def _build_flashcard_prompt(
+        self,
+        lesson_context: str,
+        difficulty_level: int,
+        history: List[dict],
+        target_language: str
+    ) -> str:
+        """
+        Build a prompt specifically for generating flashcards.
+        """
+        # Build a summary of recent history if context is empty
+        history_summary = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history[-10:]])
+        
+        return f"""Role: Professor & Study Assistant.
+Task: Extract 10 KEY CONCEPTS and their DEFINITIONS from the provided Context or Discussion History to create interative Flashcards.
+Language: {target_language.upper()} (All cards MUST be in {target_language.upper()}).
+
+STRICT CONTEXT:
+---
+{lesson_context if lesson_context else 'No file uploaded. Use Discussion History below.'}
+---
+
+DISCUSSION HISTORY (USE AS FALLBACK CONTEXT):
+---
+{history_summary if history_summary else 'No recent discussion.'}
+---
+
+REQUIREMENTS:
+1. **EXTRACT 10 CARDS**: Extract exactly 10 distinct technical concepts or terms.
+2. **FORMAT**: Return each card as a 'SHOW_FLASHCARDS' board action.
+3. **STYLE**: 
+   - Front: The concept name (short).
+   - Back: A clear, concise definition (1-2 sentences).
+4. **NO HALLUCINATIONS**: Only use information present in the source or discussion.
+
+OUTPUT FORMAT:
+BOARD: [
+  {{
+    "kind": "SHOW_FLASHCARDS",
+    "payload": {{
+      "cards": [
+        {{ "front": "Concept 1", "back": "Definition 1..." }},
+        {{ "front": "Concept 2", "back": "Definition 2..." }},
+        ... (10 cards total)
+      ]
+    }}
+  }}
+]
+SPEECH: I've prepared some flashcards to help you memorize the key concepts. Flip them over to see if you can define them yourself!
+"""
 
     def _check_question_coverage(self, question: str, file_content: str) -> bool:
         """
@@ -268,16 +509,19 @@ SPEECH: ...
         logger.info(f"Question coverage check: {coverage_ratio:.2%} match, covered={is_covered}")
         return is_covered
 
-    def _detect_language(self, text: str) -> str:
+    def _detect_language(self, text: str, context_language: Optional[str] = None) -> str:
         """
-        Simple deterministic stop-word language detection.
-        Returns 'english' or 'french'. Defaults to 'english' if ambiguous.
+        Detect language of the text.
+        
+        Args:
+            text: The user input to analyze.
+            context_language: The language of the current session. 
+                              If provided, it acts as a strong bias (sticky language).
+                              The detection will only switch if there is a VERY clear signal.
         """
         text_lower = text.lower()
         
         # KEYWORD OVERRIDE (User explicit preference)
-        # If user mentions "english" or "anglais", they likely want to switch/speak it.
-        # Even if the rest of the sentence is French (e.g. "parle en english stp")
         if "english" in text_lower or "anglais" in text_lower:
             logger.info("Language override: detected explicit 'english' keyword.")
             return "english"
@@ -293,7 +537,8 @@ SPEECH: ...
             "le", "la", "de", "et", "un", "une", "est", "à", "quoi", "comment", 
             "pourquoi", "reponse", "question", "je", "tu", "il", "elle", "nous", 
             "vous", "ils", "elles", "mon", "ton", "son", "ce", "cette", "svp", "pardon",
-            "c'est", "j'ai", "qu'est", "oui", "non", "merci", "y", "en", "vas", "allez", "va"
+            "c'est", "j'ai", "qu'est", "oui", "non", "merci", "y", "en", "vas", "allez", "va",
+            "bonjour", "salut"
         }
         es_stops = {
             "el", "la", "lo", "de", "que", "en", "y", "a", "no", "si", "mi", "tu",
@@ -305,12 +550,14 @@ SPEECH: ...
             "أنت", "على", "في", "من", "إلى", "عن", "مع", "كان", "ليس", "شكرا"
         }
         
-        # Better tokenization: split by spaces and hyphens
         import re
+        if re.search(r'[\u0600-\u06FF]', text):
+             return "arabic" # Strongest signal
+
+        # Clean tokenization
         tokens = re.split(r'[\s\-]+', text_lower)
         clean_tokens = set()
         for t in tokens:
-            # Strip simple trailing punctuation like ? ! . ,
             clean_t = t.rstrip("?!.,:;")
             if clean_t:
                 clean_tokens.add(clean_t)
@@ -320,13 +567,6 @@ SPEECH: ...
         es_count = len(clean_tokens.intersection(es_stops))
         ar_count = len(clean_tokens.intersection(ar_stops))
         
-        # Check for Arabic characters (heuristic)
-        import re
-        if re.search(r'[\u0600-\u06FF]', text):
-            ar_count += 5 # High boost for script match
-            
-        logger.info(f"Language detection - Eng: {eng_count}, Fr: {fr_count}, Es: {es_count}, Ar: {ar_count}")
-        
         counts = {
             "english": eng_count,
             "french": fr_count,
@@ -334,11 +574,26 @@ SPEECH: ...
             "arabic": ar_count
         }
         
-        # Win by majority
         detected = max(counts, key=counts.get)
+        max_score = counts[detected]
+
+        logger.info(f"Language detection scores - Eng: {eng_count}, Fr: {fr_count}, Es: {es_count}, Ar: {ar_count}. Context: {context_language}")
         
-        if counts[detected] == 0:
-            return "english" # Default
+        # VISCOSITY LOGIC: Prefer sticking to context_language unless strong signal otherwise
+        if context_language and context_language in counts:
+            if max_score > 0 and detected != context_language:
+                # We have a conflicting detection.
+                # If the score is low (e.g. 1 word), stick to context.
+                # If score is high (3+ words), allow switch.
+                if max_score < 3:
+                     logger.info(f"Weak language signal ({detected}={max_score}). Sticking to context: {context_language}")
+                     return context_language
+            elif max_score == 0:
+                # No signal, preserve context
+                return context_language
+
+        if max_score == 0:
+            return "english" # Default fallback
             
         return detected
 
@@ -463,13 +718,33 @@ BOARD: [{{"kind": "WRITE_TITLE", "payload": {{"text": "About: {clean_input[:30]}
         return """SPEECH: Let me break this down for you. Think of it like building blocks—each piece stacks on the other. This helps you understand the foundation before we move to more complex ideas.
 BOARD: [{{"kind": "WRITE_TITLE", "payload": {{"text": "Key Concept"}}}}, {{"kind": "WRITE_BULLET", "payload": {{"text": "First part: the foundation", "position": 1}}}}, {{"kind": "WRITE_BULLET", "payload": {{"text": "Second part: builds on that", "position": 2}}}}]"""
 
+    async def generate_title(self, history: List[dict]) -> str:
+        """
+        Generate a concise (3-5 words) title for the session based on history.
+        """
+        prompt = "Based on the following conversation, generate a short, descriptive title (3-5 words) that summarizes the topic. "
+        prompt += "Do not include any prefixes like 'Title:', 'Summary:', or 'Discussed:'. Just return the title itself.\n\n"
+        
+        import re
+        for msg in history[-4:]:  # Use last 4 messages for context
+            # Clean technical tags [INTERRUPTION], [FOLLOW-UP], etc.
+            clean_content = re.sub(r'\[.*?\]\s*', '', msg['content']).strip()
+            prompt += f"{msg['role'].capitalize()}: {clean_content}\n"
+            
+        try:
+            raw_response = await self._call_llm(prompt)
+            title = raw_response.strip().strip('"').strip('*')
+            # Final cleanup: remove common prefixes if LLM ignored instructions
+            if ":" in title and len(title.split(":")[0]) < 10:
+                title = title.split(":", 1)[1].strip()
+            return title
+        except Exception as e:
+            logger.error(f"Error generating title: {e}")
+            return "New Discussion"
+
     def _parse_response(self, raw_response: str) -> tuple[str, List[BoardAction]]:
         """
         Parse raw LLM response into speech + board actions.
-
-        Expected format:
-            SPEECH: ...
-            BOARD: [...]
         """
         import json
         import re
@@ -477,100 +752,164 @@ BOARD: [{{"kind": "WRITE_TITLE", "payload": {{"text": "Key Concept"}}}}, {{"kind
         speech_text = ""
         board_json = "[]"
 
-        # Try to find BOARD first now
-        board_match = re.search(r'BOARD:\s*(\[.+?\])\s*(?:SPEECH:|$)', raw_response, re.DOTALL | re.IGNORECASE)
+        # 1. Extract BOARD block - capturing everything between BOARD: and SPEECH: / end
+        board_match = re.search(r'BOARD:\s*(.*?)(?=\s*SPEECH:|$)', raw_response, re.DOTALL | re.IGNORECASE)
         if board_match:
-            board_json = board_match.group(1).strip()
+            candidate = board_match.group(1).strip()
+            # Clean up potential markdown code blocks
+            candidate = re.sub(r'^```(?:json)?\s*|\s*```$', '', candidate, flags=re.MULTILINE)
+            board_json = candidate
         else:
-            # Fallback: Look for any JSON array, picking the largest one
-            json_matches = re.findall(r'(\[[\s\S]+\])', raw_response)
+            # Fallback 1: largest JSON array
+            json_matches = re.findall(r'(\[[\s\S]+?\])', raw_response)
             if json_matches:
-                 # Find the match with the most nested brackets or just longest
-                 board_json = max(json_matches, key=len)
-
-        # Attempt to repair truncated JSON (simple fix)
-        if board_json and not board_json.endswith(']'):
-            # If it looks like it ended inside an object, try to close it
-            if board_json.strip().endswith('}'): 
-                board_json += ']' 
-            elif board_json.strip().endswith('"'):
-                board_json += '}]'
+                board_json = max(json_matches, key=len)
             else:
-                 # Last resort: try to close generic structure
-                 board_json += '}]'
+                 # Fallback 2: Check for loose "questions" object (common in quiz generation)
+                 # matches { "questions": [ ... ] }
+                 quiz_match = re.search(r'(\{[\s\n]*"questions"[\s\n]*:[\s\n]*\[[\s\S]+?\][\s\n]*\})', raw_response)
+                 if quiz_match:
+                     # Wrap it in standard action format
+                     logger.info("Detected raw quiz JSON, wrapping in SHOW_QUIZ action")
+                     raw_quiz = quiz_match.group(1)
+                     board_json = f'[{{ "kind": "SHOW_QUIZ", "payload": {raw_quiz} }}]'
 
-        # Parse SPEECH
+        # 2. Extract SPEECH block
         speech_match = re.search(r'SPEECH:\s*((?:.|\n)+)', raw_response, re.DOTALL | re.IGNORECASE)
         if speech_match:
-             speech_text = speech_match.group(1).strip()
-        
-        # Cleanup speech if it captured trailing brackets/artifacts
-        if "BOARD:" in speech_text: # Should not happen if BOARD is first, but robust check
-             speech_text = speech_text.split("BOARD:")[0].strip()
-
-        # Clean up speech text (remove quotes if present)
-        if speech_text.startswith('"') and speech_text.endswith('"'):
-            speech_text = speech_text[1:-1]
+            speech_text = speech_match.group(1).strip()
+            # Clean up if BOARD follows SPEECH in the text
+            if "BOARD:" in speech_text:
+                speech_text = speech_text.split("BOARD:")[0].strip()
+        if not speech_text:
+            # If no SPEECH tag found, but we have text that isn't JSON, treat it as speech
+            # First, strip board_json if it was extracted loosely
+            clean_raw = raw_response
+            if board_json and board_json != "[]":
+                clean_raw = clean_raw.replace(board_json, "")
             
-        # Fallback Speech if empty (e.g. truncated)
-        if not speech_text and board_json and len(board_json) > 10:
-             speech_text = "I've outlined the key points on the board. Let's take a look."
+            # Remove any trailing tags
+            clean_raw = re.sub(r'BOARD:\s*', '', clean_raw, flags=re.IGNORECASE)
+            speech_text = clean_raw.strip()
+            
+            if not speech_text and board_json and len(board_json) > 10:
+                # Only fallback to quiz message IF it actually looks like a quiz
+                if '"questions"' in board_json.lower():
+                    speech_text = "Here is the quiz you requested. Good luck!"
+                else:
+                    speech_text = "I've updated the board with a summary for you."
 
-        # Parse board actions
+        # 3. Parse and normalize board actions
         board_actions = []
         try:
-            # We want to collect ALL board actions, even if the LLM repeats the BOARD tag
-            # or outputs multiple JSON arrays.
-            all_actions_data = []
-            
-            # Find all JSON arrays in the response
-            json_array_matches = re.findall(r'(\[[\s\S]+?\])', raw_response)
-            
-            for array_str in json_array_matches:
-                try:
-                    # Basic cleanup for common LLM artifacts in JSON strings
-                    clean_array_str = array_str.strip()
-                    # If it's just "[...]" we try to parse it
-                    data = json.loads(clean_array_str)
-                    if isinstance(data, list):
-                        all_actions_data.extend(data)
-                except:
-                    continue
-            
-            if not all_actions_data and board_json and board_json != "[]":
-                # Fallback to the single match logic if findall failed to catch the specific BLOCK
-                all_actions_data = json.loads(board_json)
-                if not isinstance(all_actions_data, list):
-                    all_actions_data = [all_actions_data] if isinstance(all_actions_data, dict) else []
+            # TRY ROBUST REPAIR if direct JSON fails
+            try:
+                raw_actions = json.loads(board_json)
+            except json.JSONDecodeError:
+                # Attempt basic repair: wrap unquoted keys and values
+                # This is a common "dirty JSON" fix for LLMs
+                fixed_json = board_json
+                # 1. wrap unquoted keys: {key: -> {"key":
+                fixed_json = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', fixed_json)
+                # 2. wrap unquoted values (simple strings): : value} -> : "value"}
+                # Note: this is tricky if values contain spaces, but let's try for words
+                fixed_json = re.sub(r':\s*([a-zA-Z_][a-zA-Z0-9_À-ÿ\s]*)\s*([,}])', r': "\1"\2', fixed_json)
+                raw_actions = json.loads(fixed_json)
 
-            for action_dict in all_actions_data:
-                    # Handle different action formats
-                    if "action" in action_dict:
-                        kind = action_dict.get("action", "WRITE_BULLET")
-                        payload = {"text": action_dict.get("text", "")}
+            if not isinstance(raw_actions, list):
+                raw_actions = [raw_actions] if isinstance(raw_actions, dict) else []
+
+            for action_dict in raw_actions:
+                if not isinstance(action_dict, dict): continue
+                
+                # Try to extract kind/action
+                kind_str = action_dict.get("kind") or action_dict.get("action")
+                payload = action_dict.get("payload") or {}
+
+                # Fallback: Check if ANY key in the dict is a valid BoardActionKind
+                # This handles { "WRITE_TITLE": "Introduction" }
+                if not kind_str:
+                    for k in action_dict.keys():
+                        try:
+                            # Try to see if this key is a valid kind
+                            BoardActionKind(str(k).upper())
+                            kind_str = str(k).upper()
+                            # If kind found as key, the value is likely the text/payload
+                            val = action_dict[k]
+                            if isinstance(val, str):
+                                payload = {"text": val}
+                            elif isinstance(val, dict):
+                                payload = val
+                            break
+                        except ValueError:
+                            continue
+                
+                # Default if still not found
+                if not kind_str:
+                    # If payload has 'questions', it's a SHOW_QUIZ action
+                    if "questions" in payload or "questions" in action_dict:
+                        kind_str = "SHOW_QUIZ"
+                        if "questions" in action_dict: payload = action_dict
                     else:
-                        kind = action_dict.get("kind", "WRITE_BULLET")
-                        payload = action_dict.get("payload", {})
+                        kind_str = "WRITE_BULLET"
 
+                # Handle flattened structure fallback
+                if not payload:
+                    # Use 'text' key if present in root
+                    if "text" in action_dict: payload["text"] = action_dict["text"]
+                    # Use 'code' key if present in root
+                    if "code" in action_dict: payload["code"] = action_dict["code"]
+
+                # Safety Net: Ensure 'text' key exists for BULLET/TITLE types
+                if isinstance(payload, dict) and "text" not in payload and "code" not in payload and kind_str != "SHOW_QUIZ":
+                    # Check for common hallucinations
+                    for key in ["content", "item", "summary", "description", "value", "data"]:
+                        if key in payload and isinstance(payload[key], str):
+                            payload["text"] = payload[key]
+                            break
+                    
+                    # Recursive search for ANY string in the payload
+                    if "text" not in payload:
+                        def find_first_string(data):
+                            if isinstance(data, str): return data
+                            if isinstance(data, dict):
+                                for v in data.values():
+                                    res = find_first_string(v)
+                                    if res: return res
+                            return None
+                        found = find_first_string(payload)
+                        if found: payload["text"] = found
+
+                # QUIZ NORMALIZATION: Fix 'answer' -> 'correct_index'
+                if kind_str == "SHOW_QUIZ" and "questions" in payload:
+                    for q in payload["questions"]:
+                        # If correct_index is missing but 'answer' string exists
+                        if "correct_index" not in q and "answer" in q and "options" in q:
+                            try:
+                                # Fuzzy match or exact match
+                                ans = q["answer"]
+                                opts = q["options"]
+                                # Try exact match
+                                if ans in opts:
+                                    q["correct_index"] = opts.index(ans)
+                                else:
+                                    # Try fuzzy / substring match
+                                    # or just default to 0 to avoid crash
+                                    q["correct_index"] = 0
+                            except:
+                                q["correct_index"] = 0
+
+                try:
                     action = BoardAction(
-                        kind=BoardActionKind(kind.upper()),
+                        kind=BoardActionKind(kind_str.upper()),
                         payload=payload,
                     )
                     board_actions.append(action)
-        except (json.JSONDecodeError, ValueError):
-            # Fallback for "broken" format like [WRITE_TITLE: text] seen in logs
-            # Matches: WRITE_TITLE: Some text up to comma or bracket
-            broken_matches = re.findall(r'(WRITE_[A-Z_]+|CLEAR|HIGHLIGHT|SHOW_QUIZ):\s*([^,\]\}]+)', board_json)
-            for kind_str, text in broken_matches:
-                try:
-                    kind = BoardActionKind(kind_str.strip().upper())
-                    # Note: Payload for SHOW_QUIZ via this fallback will be messy/incomplete
-                    # But better than nothing.
-                    board_actions.append(BoardAction(kind=kind, payload={"text": text.strip()}))
-                except ValueError:
+                except (ValueError, KeyError):
                     continue
-            
-            if not board_actions:
-                 logger.warning(f"Failed to parse board actions from: {board_json}")
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Failed to parse board actions from: {board_json[:100]}... Error: {e}")
 
         return speech_text, board_actions
+

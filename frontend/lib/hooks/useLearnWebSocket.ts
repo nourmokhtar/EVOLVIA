@@ -21,7 +21,19 @@ export type InboundEvent =
   | ResumeEvent
   | ChangeDifficultyEvent
   | ToggleVoiceEvent
+  | RequestQuizEvent
+  | RequestFlashcardsEvent
   | StatusEvent;
+
+export interface RequestQuizEvent {
+  type: "REQUEST_QUIZ";
+  session_id: string;
+}
+
+export interface RequestFlashcardsEvent {
+  type: "REQUEST_FLASHCARDS";
+  session_id: string;
+}
 
 export type OutboundEvent =
   | TeacherTextDeltaEvent
@@ -104,7 +116,7 @@ export interface TeacherTextFinalEvent {
 }
 
 export interface BoardAction {
-  kind: "WRITE_TITLE" | "WRITE_BULLET" | "WRITE_STEP" | "CLEAR" | "HIGHLIGHT" | "SHOW_QUIZ" | "SHOW_IMAGE" | "DRAW_DIAGRAM";
+  kind: "WRITE_TITLE" | "WRITE_BULLET" | "WRITE_STEP" | "CLEAR" | "HIGHLIGHT" | "SHOW_QUIZ" | "SHOW_FLASHCARDS" | "SHOW_IMAGE" | "DRAW_DIAGRAM";
   payload: Record<string, any>;
 }
 
@@ -504,14 +516,14 @@ export function useLearnWebSocket(
         // Then connect to WebSocket with the session ID
         connect(sessionId);
 
-        return true;
+        return sessionId;
       } catch (e) {
         console.error("Failed to start session:", e);
         setState((prev) => ({
           ...prev,
           error: String(e),
         }));
-        return false;
+        return null;
       }
     },
     [apiUrl, connect]
@@ -608,6 +620,7 @@ export function useLearnWebSocket(
     getStatus,
     startSession,
     sendAudioChunk,
+
     toggleVoice: (action: "start" | "stop") => {
       if (!state.sessionId) return false;
       return sendMessage({
@@ -615,6 +628,34 @@ export function useLearnWebSocket(
         session_id: state.sessionId,
         action,
       });
+    },
+
+    requestQuiz: () => {
+      if (!state.sessionId) return false;
+      return sendMessage({
+        type: "REQUEST_QUIZ",
+        session_id: state.sessionId,
+      } as RequestQuizEvent);
+    },
+
+    requestFlashcards: () => {
+      if (!state.sessionId) return false;
+      return sendMessage({
+        type: "REQUEST_FLASHCARDS",
+        session_id: state.sessionId,
+      } as RequestFlashcardsEvent);
+    },
+
+    restoreBoardAction: (action: BoardAction) => {
+      // We can define it inline here if we want, or outside.
+      // Since I can't easily insert outside without risk, I'll define it inline here 
+      // OR rely on the definition I will add next. 
+      // Let's define it INLINE to be safe and atomic.
+      setState((prev) => ({
+        ...prev,
+        boardActions: [{ kind: "CLEAR", payload: {} } as BoardAction, action],
+        status: "teaching"
+      }));
     },
 
     // Event listeners

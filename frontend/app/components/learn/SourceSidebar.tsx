@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from "react";
-import { Upload, FileText, Trash2, Plus, History, MessageSquare, Clock, MoreVertical, RefreshCw } from "lucide-react";
+import { Upload, FileText, Trash2, Plus, History, MessageSquare, Clock, MoreVertical, RefreshCw, Paperclip } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface SessionSummary {
@@ -9,6 +9,7 @@ interface SessionSummary {
     difficulty: string;
     turns: number;
     summary: string;
+    uploaded_file_name?: string;
 }
 
 interface SourceSidebarProps {
@@ -36,6 +37,7 @@ export function SourceSidebar({
     const [activeTab, setActiveTab] = useState<"sources" | "history">("history");
     const [sessions, setSessions] = useState<SessionSummary[]>([]);
     const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+    const [isCreating, setIsCreating] = useState(false);
 
     // Fetch history when tab changes to history or trigger changes
     useEffect(() => {
@@ -63,6 +65,58 @@ export function SourceSidebar({
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             onUpload(e.target.files[0]);
+        }
+    };
+
+    const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+    const [editTitle, setEditTitle] = useState("");
+    const editInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (editingSessionId && editInputRef.current) {
+            editInputRef.current.focus();
+        }
+    }, [editingSessionId]);
+
+    const startEditing = (e: React.MouseEvent, session: SessionSummary) => {
+        e.stopPropagation();
+        setEditingSessionId(session.session_id);
+        setEditTitle(session.summary);
+    };
+
+    const saveRename = async (sessionId: string) => {
+        if (!editTitle.trim()) return cancelEditing();
+
+        try {
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+            const res = await fetch(`${apiUrl}/api/v1/learn/sessions/${sessionId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: editTitle })
+            });
+
+            if (res.ok) {
+                setSessions(prev => prev.map(s =>
+                    s.session_id === sessionId ? { ...s, summary: editTitle } : s
+                ));
+            }
+        } catch (error) {
+            console.error("Failed to rename session", error);
+        } finally {
+            setEditingSessionId(null);
+        }
+    };
+
+    const cancelEditing = () => {
+        setEditingSessionId(null);
+        setEditTitle("");
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent, sessionId: string) => {
+        if (e.key === 'Enter') {
+            saveRename(sessionId);
+        } else if (e.key === 'Escape') {
+            cancelEditing();
         }
     };
 
@@ -138,9 +192,19 @@ export function SourceSidebar({
                                 <FileText className="w-4 h-4 text-primary" />
                                 Course Material
                             </h2>
-                            <span className="text-[10px] text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">
-                                {uploadedFileName ? 1 : 0}
-                            </span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => fileInputRef.current?.click()}
+                                    disabled={isUploading}
+                                    className="p-1 hover:bg-primary/10 text-primary rounded-lg transition-colors"
+                                    title="Add source"
+                                >
+                                    <Plus className="w-4 h-4" />
+                                </button>
+                                <span className="text-[10px] text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">
+                                    {uploadedFileName ? 1 : 0}
+                                </span>
+                            </div>
                         </div>
 
                         {!uploadedFileName ? (
@@ -186,18 +250,29 @@ export function SourceSidebar({
                         <div className="flex items-center justify-between mb-2">
                             <h2 className="font-bold text-sm flex items-center gap-2">
                                 <Clock className="w-4 h-4 text-primary" />
-                                Recent Sessions
+                                Discussions
                             </h2>
                             <div className="flex items-center gap-2">
                                 <button
-                                    onClick={async () => {
-                                        if (onNewSession) {
+                                    onClick={async (e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        if (isCreating || !onNewSession) return;
+
+                                        setIsCreating(true);
+                                        try {
                                             await onNewSession();
-                                            fetchHistory();
+                                            await fetchHistory();
+                                        } finally {
+                                            setIsCreating(false);
                                         }
                                     }}
-                                    className="p-1 hover:bg-primary/10 text-primary rounded-lg transition-colors"
-                                    title="New Discussion"
+                                    disabled={isCreating}
+                                    className={cn(
+                                        "p-1 hover:bg-primary/10 text-primary rounded-lg transition-colors",
+                                        isCreating && "opacity-50 cursor-wait"
+                                    )}
+                                    title="Nouvelle Discussion"
                                 >
                                     <Plus className="w-4 h-4" />
                                 </button>
@@ -206,7 +281,7 @@ export function SourceSidebar({
                                     className="p-1 hover:bg-primary/10 text-primary rounded-lg transition-colors"
                                     title="Refresh List"
                                 >
-                                    <RefreshCw className="w-4 h-4" />
+                                    <RefreshCw className={cn("w-4 h-4", isLoadingHistory && "animate-spin")} />
                                 </button>
                             </div>
                         </div>
@@ -232,30 +307,39 @@ export function SourceSidebar({
                                             : "bg-surface border-border hover:border-primary/30 hover:bg-surface/80"
                                     )}
                                 >
-                                    <div className="flex justify-between items-start mb-1">
-                                        <span className={cn(
-                                            "text-[10px] px-1.5 py-0.5 rounded font-medium",
-                                            session.difficulty === "Beginner" ? "bg-green-500/10 text-green-400" :
-                                                session.difficulty === "Intermediate" ? "bg-yellow-500/10 text-yellow-400" :
-                                                    "bg-red-500/10 text-red-400"
-                                        )}>
-                                            {session.difficulty}
-                                        </span>
-                                        <span className="text-[10px] text-muted-foreground">
-                                            {formatDate(session.created_at)}
-                                        </span>
-                                    </div>
-                                    <h3 className="text-sm font-semibold mb-1 line-clamp-1 group-hover:text-primary transition-colors">
-                                        {session.summary}
-                                    </h3>
-                                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground/70">
-                                        <MessageSquare className="w-3 h-3" />
-                                        <span>{session.turns} turns</span>
-                                    </div>
+
+
+                                    {editingSessionId === session.session_id ? (
+                                        <div onClick={(e) => e.stopPropagation()} className="mb-1">
+                                            <input
+                                                ref={editInputRef}
+                                                type="text"
+                                                value={editTitle}
+                                                onChange={(e) => setEditTitle(e.target.value)}
+                                                onKeyDown={(e) => handleKeyDown(e, session.session_id)}
+                                                onBlur={() => saveRename(session.session_id)}
+                                                className="w-full bg-background border border-primary/50 rounded px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                                            />
+                                        </div>
+                                    ) : (
+                                        <h3 className="text-sm font-semibold mb-1 line-clamp-1 group-hover:text-primary transition-colors">
+                                            {session.summary}
+                                        </h3>
+                                    )}
+
+                                    {session.uploaded_file_name && (
+                                        <div className="flex items-center gap-1 text-[10px] text-muted-foreground bg-primary/5 px-2 py-0.5 rounded-full w-fit">
+                                            <Paperclip className="w-3 h-3" />
+                                            <span className="truncate max-w-[150px]">{session.uploaded_file_name}</span>
+                                        </div>
+                                    )}
+
+
 
                                     {/* Action Menu - Stop propagation to prevent selection */}
                                     <div className="absolute top-2 right-2 transition-opacity">
                                         <SessionMenu
+                                            onRename={(e) => startEditing(e, session)}
                                             onDelete={(e) => deleteSession(e, session.session_id)}
                                         />
                                     </div>
@@ -278,7 +362,7 @@ export function SourceSidebar({
 }
 
 // Helper component for the session menu (local)
-function SessionMenu({ onDelete }: { onDelete: (e: React.MouseEvent) => void }) {
+function SessionMenu({ onRename, onDelete }: { onRename: (e: React.MouseEvent) => void, onDelete: (e: React.MouseEvent) => void }) {
     const [isOpen, setIsOpen] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
 
@@ -307,6 +391,18 @@ function SessionMenu({ onDelete }: { onDelete: (e: React.MouseEvent) => void }) 
 
             {isOpen && (
                 <div className="absolute right-0 top-6 w-32 bg-[#0F1623] border border-border rounded-lg shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+                    <button
+                        onClick={(e) => {
+                            setIsOpen(false);
+                            onRename(e);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-foreground hover:bg-white/5 transition-colors text-left"
+                    >
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                        Rename
+                    </button>
                     <button
                         onClick={(e) => {
                             setIsOpen(false);

@@ -25,6 +25,10 @@ class InboundEventType(str, Enum):
     RESUME = "RESUME"
     CHANGE_DIFFICULTY = "CHANGE_DIFFICULTY"
     TOGGLE_VOICE = "TOGGLE_VOICE"
+    REQUEST_QUIZ = "REQUEST_QUIZ"
+    REQUEST_FLASHCARDS = "REQUEST_FLASHCARDS"
+    REQUEST_EXERCISE = "REQUEST_EXERCISE"
+    REQUEST_MINIGAME = "REQUEST_MINIGAME"
 
 
 class OutboundEventType(str, Enum):
@@ -65,6 +69,9 @@ class BoardActionKind(str, Enum):
     SHOW_IMAGE = "SHOW_IMAGE"
     SHOW_QUIZ = "SHOW_QUIZ"
     SHOW_REWARD = "SHOW_REWARD"
+    SHOW_FLASHCARDS = "SHOW_FLASHCARDS"
+    SHOW_EXERCISE = "SHOW_EXERCISE"
+    SHOW_MINIGAME = "SHOW_MINIGAME"
 
 
 # ============================================================================
@@ -125,8 +132,43 @@ class ToggleVoiceEvent(InboundEventBase):
     action: Literal["start", "stop"]
 
 
+class RequestQuizEvent(InboundEventBase):
+    """Student requests a quiz based on discussion/source"""
+    type: Literal[InboundEventType.REQUEST_QUIZ] = InboundEventType.REQUEST_QUIZ
+    session_id: str
+
+
+class RequestFlashcardsEvent(InboundEventBase):
+    """Student requests flashcards based on discussion/source"""
+    type: Literal[InboundEventType.REQUEST_FLASHCARDS] = InboundEventType.REQUEST_FLASHCARDS
+    session_id: str
+
+
+class RequestExerciseEvent(InboundEventBase):
+    """Student requests a fill-in-the-blank exercise"""
+    type: Literal[InboundEventType.REQUEST_EXERCISE] = InboundEventType.REQUEST_EXERCISE
+    session_id: str
+
+
+class RequestMiniGameEvent(InboundEventBase):
+    """Student requests a mini-game (e.g. concept match)"""
+    type: Literal[InboundEventType.REQUEST_MINIGAME] = InboundEventType.REQUEST_MINIGAME
+    session_id: str
+
+
 # Union type for all inbound events
-InboundEvent = Union[StartLessonEvent, UserMessageEvent, InterruptEvent, ResumeEvent, ChangeDifficultyEvent, ToggleVoiceEvent]
+InboundEvent = Union[
+    StartLessonEvent, 
+    UserMessageEvent, 
+    InterruptEvent, 
+    ResumeEvent, 
+    ChangeDifficultyEvent, 
+    ToggleVoiceEvent, 
+    RequestQuizEvent,
+    RequestFlashcardsEvent,
+    RequestExerciseEvent,
+    RequestMiniGameEvent
+]
 
 
 # ============================================================================

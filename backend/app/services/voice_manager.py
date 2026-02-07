@@ -115,7 +115,7 @@ class VoiceManager:
             Transcribed text if audio was recorded, else None.
         """
         if self.is_recording:
-            logger.info("Manual end of recording triggered...")
+            logger.info(f"Manual end of recording triggered. Buffer size: {len(self.recorded_audio)} bytes")
             text = await self._process_recorded_speech(language)
             self.is_recording = False
             return text
