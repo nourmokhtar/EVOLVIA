@@ -79,9 +79,18 @@ def analyze_vocal_delivery(audio_bytes_base64: str) -> dict:
             except:
                 pass
         
-        print(f"!!! VOCAL TOOL ERROR: {str(e)} !!!")
+        error_msg = str(e) if str(e) else "Unknown error during audio processing"
+        print(f"!!! VOCAL TOOL ERROR: {error_msg} !!!")
+        
+        # Check for ffmpeg related issues
+        hint = ""
+        if "ffmpeg" in error_msg.lower() or "audioread" in error_msg.lower():
+            hint = " HINT: ffmpeg might be missing. Please install ffmpeg and add it to your PATH."
+        elif "backend" in error_msg.lower():
+             hint = " HINT: librosa could not find a suitable audio backend. Install ffmpeg."
+
         return {
-            "error": str(e), 
+            "error": f"{error_msg}{hint}", 
             "vocal_engagement_score": 0,
             "status": "Processing Failed"
         }

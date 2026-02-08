@@ -23,4 +23,7 @@ export const API = {
     analyze: `${API_URL}/api/v1/pitch/analyze`,
     history: `${API_URL}/api/v1/pitch/history`,
   },
+  languageImprovement: {
+    analyze: `${API_URL}/api/v1/language-improvement/analyze`,
+  },
 };

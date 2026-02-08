@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 import json
 try:
-    import mediapipe as mp
+    import mediapipe.python.solutions.pose as mp_pose
     HAS_MEDIAPIPE = True
 except ImportError:
     HAS_MEDIAPIPE = False
@@ -31,8 +31,7 @@ def analyze_posture(video_frame_base64: str) -> dict:
         if img is None:
             return {"error": "Could not decode image", "posture_score": 0}
 
-        # Initialize MediaPipe Pose
-        mp_pose = mp.solutions.pose
+        # Use direct mp_pose import
         with mp_pose.Pose(
             static_image_mode=True,
             model_complexity=2, # Higher complexity for better accuracy

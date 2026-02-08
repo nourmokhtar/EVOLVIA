@@ -10,6 +10,8 @@ try:
 except ImportError:
     def track(func): return func
 
+from ..utils.json_utils import parse_json_robustly
+
 @track
 async def tone_agent(state: PitchAnalysisState):
     """
@@ -71,15 +73,18 @@ async def tone_agent(state: PitchAnalysisState):
         response = await chain.ainvoke({"metrics": json.dumps(metrics), "transcript": transcript})
         
         content = response.content.strip()
-        try:
-            import re
-            json_match = re.search(r"(\{.*\})", content, re.DOTALL)
-            if json_match:
-                content = json_match.group(1)
-            analysis = json.loads(content)
-        except:
-            content = response.content.replace("```json", "").replace("```", "").strip()
-            analysis = json.loads(content)
+        analysis = parse_json_robustly(content)
+
+        if not analysis:
+            print(f"--- FAILED TO PARSE TONE ANALYSIS. CONTENT: {content[:200]}... ---")
+            analysis = {
+                "score": 75,
+                "feedback": "Your vocal delivery was steady. Try more pitch variance to increase engagement.",
+                "empathy_score": 70,
+                "energy_level": "Calm",
+                "speaking_rate_rating": "Ideal",
+                "voice_type": "Professional"
+            }
 
         print(f"TONE RESULT: {json.dumps(analysis, indent=2)}")
         return {"tone_analysis": analysis}

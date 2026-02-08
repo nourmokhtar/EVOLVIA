@@ -25,6 +25,7 @@ import { StudyHubModal } from "../components/learn/StudyHubModal";
 import { SourceSidebar } from "../components/learn/SourceSidebar";
 import { StudioSidebar } from "../components/learn/StudioSidebar";
 import { VirtualBoard } from "../components/learn/VirtualBoard";
+import { CrosswordModal } from "../components/learn/CrosswordModal";
 import { ChatMessage } from "../components/learn/ChatMessage";
 
 
@@ -91,29 +92,6 @@ export default function LearnPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize session on mount
-  useEffect(() => {
-    setIsMounted(true);
-
-    const init = async () => {
-      // Small delay to ensure everything is ready
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Initialize audio context (may still require first click elsewhere for some browsers)
-      if (tts.resume) tts.resume();
-
-      // Start WebSocket session
-      setIsLoading(true);
-      const currentSessionId = await ws.startSession(lessonId, userId);
-
-      if (!currentSessionId) {
-        addSystemMessage("Failed to connect to teacher", "error");
-        setIsLoading(false);
-      }
-    };
-
-    init();
-  }, []);
 
   const [quizPayload, setQuizPayload] = useState<any>(null);
   const [isQuizOpen, setIsQuizOpen] = useState(false);
@@ -123,13 +101,21 @@ export default function LearnPage() {
   const [flashcardPayload, setFlashcardPayload] = useState<any>(null);
   const isFlashcardsOpenRef = useRef(false);
 
+  const [isCrosswordOpen, setIsCrosswordOpen] = useState(false);
+  const [crosswordPayload, setCrosswordPayload] = useState<any>(null);
+  const isCrosswordOpenRef = useRef(false);
+
   // Level Up State
   const [showLevelUp, setShowLevelUp] = useState(false);
   const [levelUpAmount, setLevelUpAmount] = useState(1);
 
+  // Manual voice recording state
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const isVoiceRecordingRef = useRef(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+
+  // Track the last session ID that we showed a "Connected" message for
+  const lastSessionMsgRef = useRef<string | null>(null);
 
   useEffect(() => {
     isVoiceRecordingRef.current = isVoiceRecording;
@@ -213,6 +199,9 @@ export default function LearnPage() {
     } else if (action.kind === "SHOW_QUIZ") {
       setQuizPayload(action.payload);
       setIsQuizOpen(true);
+    } else if (action.kind === "SHOW_CROSSWORD") {
+      setCrosswordPayload(action.payload);
+      setIsCrosswordOpen(true);
     }
   };
 
@@ -223,13 +212,13 @@ export default function LearnPage() {
       setIsLoading(false);
 
       // CRITICAL: Clear the URL so we don't try to auto-resume this dead session
-      const params = new URLSearchParams(searchParams.toString());
+      const params = new URLSearchParams(window.location.search);
       if (params.has("session_id")) {
         params.delete("session_id");
         router.replace(`?${params.toString()}`);
       }
     }
-  }, [ws.error, router, searchParams]);
+  }, [ws.error, router]);
 
   const [voiceCount, setVoiceCount] = useState(0);
 
@@ -310,6 +299,54 @@ export default function LearnPage() {
     };
   }, [ws.disconnect]);
 
+  // INITIALIZATION - Moved here to fix lint errors (it uses addSystemMessage)
+  const hasInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasInitializedRef.current) return;
+    setIsMounted(true);
+
+    const init = async () => {
+      // Small delay to ensure everything is ready
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Mark initialized early to prevent double runs
+      hasInitializedRef.current = true;
+
+      // Initialize audio context
+      if (tts.resume) tts.resume();
+
+      // Start or Resume WebSocket session
+      setIsLoading(true);
+
+      let currentSessionId = sessionIdParam;
+
+      if (currentSessionId) {
+        console.log("Resuming session from URL:", currentSessionId);
+        ws.connect(currentSessionId);
+      } else {
+        console.log("No session ID in URL. Waiting for manual session start.");
+        setIsLoading(false);
+        hasInitializedRef.current = false; // Allow re-init if they start manually
+        return;
+      }
+
+      if (!currentSessionId) {
+        addSystemMessage("Failed to connect to teacher", "error");
+        setIsLoading(false);
+      } else {
+        // Update URL with session ID if not already there
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("session_id") !== currentSessionId) {
+          params.set("session_id", currentSessionId);
+          router.replace(`?${params.toString()}`);
+        }
+      }
+    };
+
+    init();
+  }, [lessonId, userId, sessionIdParam, router, ws, addSystemMessage, tts]);
+
   const handleSendMessage = useCallback(async (textOverride?: string, displayText?: string) => {
     const textToSend = typeof textOverride === 'string' ? textOverride : input;
 
@@ -364,7 +401,12 @@ export default function LearnPage() {
     const unsubscribeConnected = ws.on("connected", () => {
       console.log("Connected to learning session");
       setIsLoading(false);
-      addSystemMessage("Connected to teacher! Ready to learn.");
+
+      // Only show message once per session ID
+      if (ws.sessionId && lastSessionMsgRef.current !== ws.sessionId) {
+        addSystemMessage("Connected to teacher! Ready to learn.");
+        lastSessionMsgRef.current = ws.sessionId;
+      }
     });
 
     // Status updates (includes level changes and progress)
@@ -413,6 +455,9 @@ export default function LearnPage() {
       } else if (event.action.kind === "SHOW_FLASHCARDS") {
         console.log("FLASHCARDS ACTION RECEIVED (Stream):", event.action.payload);
         return; // Handled in teacher_text_final to avoid race/duplication
+      } else if (event.action.kind === "SHOW_CROSSWORD") {
+        console.log("CROSSWORD ACTION RECEIVED (Stream):", event.action.payload);
+        return; // Handled in teacher_text_final
       } else {
         console.log("Realtime board action:", event.action);
         setBoardActions((prev) => {
@@ -474,6 +519,15 @@ export default function LearnPage() {
           isFlashcardsOpenRef.current = true;
         }
 
+        // Check for crossword action
+        const crosswordAction = event.board_actions?.find((a: any) => a.kind === "SHOW_CROSSWORD");
+        if (crosswordAction && !isCrosswordOpenRef.current) {
+          console.log("Found crossword action in final event:", crosswordAction);
+          setCrosswordPayload(crosswordAction.payload);
+          setIsCrosswordOpen(true);
+          isCrosswordOpenRef.current = true;
+        }
+
         // Check for streaming failure BEFORE resetting the ref
         if ((!isQuizOpenRef.current || isQuizAnsweredRef.current) && !quizAction) {
           if (currentTeacherTextRef.current.length < 5 && event.text.length > 5) {
@@ -516,6 +570,24 @@ export default function LearnPage() {
         isFinal: true
       }));
       setMessages(restoredMessages);
+
+      // NEW: If the last message was a request for quiz/flashcards/etc., auto-open it
+      if (restoredMessages.length > 0) {
+        const lastMsg = restoredMessages[restoredMessages.length - 1];
+        const lastText = lastMsg.text.toLowerCase();
+
+        if (lastText.includes("requested quiz") || lastText.includes("[requested quiz]")) {
+          setIsQuizOpen(true);
+          isQuizOpenRef.current = true;
+        } else if (lastText.includes("requested flashcards") || lastText.includes("[requested flashcards]")) {
+          setIsFlashcardsOpen(true);
+          isFlashcardsOpenRef.current = true;
+        } else if (lastText.includes("requested crossword") || lastText.includes("[requested crossword]")) {
+          setIsCrosswordOpen(true);
+          isCrosswordOpenRef.current = true;
+        }
+      }
+
       // Ensure we clear the current streaming buffer so it doesn't duplicate
       currentTeacherTextRef.current = "";
       scrollToBottom();
@@ -921,13 +993,21 @@ export default function LearnPage() {
                 tts.stop();
                 setIsSpeaking(false);
 
-                // Fetch session details to restore file state
+                // Fetch session details to restore state
                 try {
                   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
                   const res = await fetch(`${apiUrl}/api/v1/learn/sessions/${id}`);
                   if (res.ok) {
                     const details = await res.json();
                     setUploadedFileName(details.uploaded_file_name || null);
+
+                    // NEW: Restore last active board state if available
+                    if (details.quizzes && details.quizzes.length > 0) {
+                      setQuizPayload(details.quizzes[details.quizzes.length - 1]);
+                    }
+                    if (details.flashcards && details.flashcards.length > 0) {
+                      setFlashcardPayload(details.flashcards[details.flashcards.length - 1]);
+                    }
                   }
                 } catch (error) {
                   console.error("Failed to fetch session details:", error);
@@ -936,6 +1016,9 @@ export default function LearnPage() {
                 ws.connect(id);
                 setMessages([]);
                 setBoardActions([]);
+                setIsQuizOpen(false);
+                setIsFlashcardsOpen(false);
+                setIsCrosswordOpen(false);
               }}
               currentSessionId={ws.sessionId}
               onNewSession={async () => {
@@ -1140,16 +1223,22 @@ export default function LearnPage() {
               onAction={(text: string, label?: string) => handleSendMessage(text, label)}
               onStartQuiz={() => {
                 setIsLoading(true);
-                setMessages((prev) => [...prev, { role: "user", text: "Start Quiz", timestamp: Date.now(), isFinal: true }]);
+                setMessages((prev) => [...prev, { role: "user", text: "Requested Quiz", timestamp: Date.now(), isFinal: true }]);
                 isQuizAnsweredRef.current = false;
                 isQuizOpenRef.current = false;
                 ws.requestQuiz();
               }}
               onStartFlashcards={() => {
                 setIsLoading(true);
-                setMessages((prev) => [...prev, { role: "user", text: "Flashcards", timestamp: Date.now(), isFinal: true }]);
+                setMessages((prev) => [...prev, { role: "user", text: "Requested Flashcards", timestamp: Date.now(), isFinal: true }]);
                 isFlashcardsOpenRef.current = false;
                 ws.requestFlashcards();
+              }}
+              onStartCrossword={() => {
+                setIsLoading(true);
+                setMessages((prev) => [...prev, { role: "user", text: "Requested Crossword", timestamp: Date.now(), isFinal: true }]);
+                isCrosswordOpenRef.current = false;
+                ws.requestCrossword();
               }}
               onOpenStudyHub={handleOpenStudyHub}
               disabled={!ws.connected || isLoading}
@@ -1178,6 +1267,17 @@ export default function LearnPage() {
         <FlashcardModal
           cards={flashcardPayload?.cards || []}
           onClose={() => setIsFlashcardsOpen(false)}
+        />
+      )}
+
+      {isCrosswordOpen && crosswordPayload && (
+        <CrosswordModal
+          isOpen={isCrosswordOpen}
+          onClose={() => {
+            setIsCrosswordOpen(false);
+            isCrosswordOpenRef.current = false;
+          }}
+          payload={crosswordPayload}
         />
       )}
 

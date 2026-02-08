@@ -29,6 +29,7 @@ class InboundEventType(str, Enum):
     REQUEST_FLASHCARDS = "REQUEST_FLASHCARDS"
     REQUEST_EXERCISE = "REQUEST_EXERCISE"
     REQUEST_MINIGAME = "REQUEST_MINIGAME"
+    REQUEST_CROSSWORD = "REQUEST_CROSSWORD"
 
 
 class OutboundEventType(str, Enum):
@@ -72,6 +73,7 @@ class BoardActionKind(str, Enum):
     SHOW_FLASHCARDS = "SHOW_FLASHCARDS"
     SHOW_EXERCISE = "SHOW_EXERCISE"
     SHOW_MINIGAME = "SHOW_MINIGAME"
+    SHOW_CROSSWORD = "SHOW_CROSSWORD"
 
 
 # ============================================================================
@@ -155,6 +157,11 @@ class RequestMiniGameEvent(InboundEventBase):
     type: Literal[InboundEventType.REQUEST_MINIGAME] = InboundEventType.REQUEST_MINIGAME
     session_id: str
 
+class RequestCrosswordEvent(InboundEventBase):
+    """Student requests a crossword puzzle"""
+    type: Literal[InboundEventType.REQUEST_CROSSWORD] = InboundEventType.REQUEST_CROSSWORD
+    session_id: str
+
 
 # Union type for all inbound events
 InboundEvent = Union[
@@ -167,7 +174,8 @@ InboundEvent = Union[
     RequestQuizEvent,
     RequestFlashcardsEvent,
     RequestExerciseEvent,
-    RequestMiniGameEvent
+    RequestMiniGameEvent,
+    RequestCrosswordEvent
 ]
 
 

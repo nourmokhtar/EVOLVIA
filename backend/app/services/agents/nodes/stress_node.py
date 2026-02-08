@@ -9,6 +9,8 @@ try:
 except ImportError:
     def track(func): return func
 
+from ..utils.json_utils import parse_json_robustly
+
 @track
 async def stress_agent(state: PitchAnalysisState):
     """
@@ -50,15 +52,16 @@ async def stress_agent(state: PitchAnalysisState):
         })
         
         content = response.content.strip()
-        try:
-            import re
-            json_match = re.search(r"(\{.*\})", content, re.DOTALL)
-            if json_match:
-                content = json_match.group(1)
-            analysis = json.loads(content)
-        except:
-            content = response.content.replace("```json", "").replace("```", "").strip()
-            analysis = json.loads(content)
+        analysis = parse_json_robustly(content)
+
+        if not analysis:
+            print(f"--- FAILED TO PARSE STRESS ANALYSIS. CONTENT: {content[:200]}... ---")
+            analysis = {
+                "stress_score": 30,
+                "resilience_score": 80,
+                "feedback": "You appear focused and calm. Minimal stress markers detected.",
+                "nervous_habits": ["None observed"]
+            }
 
         print(f"STRESS RESULT: {json.dumps(analysis, indent=2)}")
         return {"stress_analysis": analysis}

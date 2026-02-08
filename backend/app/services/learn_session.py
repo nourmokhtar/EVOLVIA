@@ -206,7 +206,29 @@ class LearnSession:
     def add_history(self, role: str, content: str) -> None:
         """Add a message to history, stripping technical tags for UI/Sidebar clarity"""
         import re
+        
+        # Check for specific technical tags to provide better descriptive fallbacks
+        tag_labels = {
+            "[REQUESTED QUIZ]": "Requested Quiz",
+            "[REQUESTED FLASHCARDS]": "Requested Flashcards",
+            "[REQUESTED CROSSWORD]": "Requested Crossword",
+            "[AUDIO_OVERVIEW]": "Requested Audio Overview",
+            "[QUIZ_COMPLETE]": "Completed Quiz",
+        }
+        
+        # If it's a known tag, use the friendly label
+        for tag, label in tag_labels.items():
+            if tag in content:
+                self.history.append({"role": role, "content": label})
+                return
+
+        # General tag stripping
         clean_content = re.sub(r'\[.*?\]\s*', '', content).strip()
+        
+        # If the result of stripping is empty but the original wasn't, use a generic fallback
+        if not clean_content and content.strip():
+            clean_content = "Action Requested"
+            
         self.history.append({"role": role, "content": clean_content})
         # Removed history limit to allow full conversation retrieval
         # We need a way to notify manager to save. 

@@ -23,6 +23,7 @@ export type InboundEvent =
   | ToggleVoiceEvent
   | RequestQuizEvent
   | RequestFlashcardsEvent
+  | RequestCrosswordEvent
   | StatusEvent;
 
 export interface RequestQuizEvent {
@@ -32,6 +33,11 @@ export interface RequestQuizEvent {
 
 export interface RequestFlashcardsEvent {
   type: "REQUEST_FLASHCARDS";
+  session_id: string;
+}
+
+export interface RequestCrosswordEvent {
+  type: "REQUEST_CROSSWORD";
   session_id: string;
 }
 
@@ -116,7 +122,7 @@ export interface TeacherTextFinalEvent {
 }
 
 export interface BoardAction {
-  kind: "WRITE_TITLE" | "WRITE_BULLET" | "WRITE_STEP" | "CLEAR" | "HIGHLIGHT" | "SHOW_QUIZ" | "SHOW_FLASHCARDS" | "SHOW_IMAGE" | "DRAW_DIAGRAM";
+  kind: "WRITE_TITLE" | "WRITE_BULLET" | "WRITE_STEP" | "CLEAR" | "HIGHLIGHT" | "SHOW_QUIZ" | "SHOW_FLASHCARDS" | "SHOW_CROSSWORD" | "SHOW_IMAGE" | "DRAW_DIAGRAM" | "SHOW_REWARD";
   payload: Record<string, any>;
 }
 
@@ -261,21 +267,24 @@ export function useLearnWebSocket(
 
       // If connected to a DIFFERENT session or closed, ensure old socket is cleaned up
       if (wsRef.current) {
-        // Prevent onclose from attempting to reconnect the old session
+        // Prevent onclose/onerror from attempting to reconnect or log errors for the old session
         wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
+        const oldState = wsRef.current.readyState;
         wsRef.current.close();
         wsRef.current = null;
+        console.log("Cleaned up existing WebSocket in state:", oldState);
       }
 
       // Update state and ref immediately to reflect the intention
       sessionIdRef.current = sessionId;
       setState(prev => ({ ...prev, sessionId, error: null }));
 
-      const wsUrl = new URL(apiUrl);
-      wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-      wsUrl.pathname = `/api/v1/learn/ws/${sessionId}`;
+      // Ensure apiUrl doesn't result in double slashes
+      const baseApiUrl = apiUrl.replace(/\/+$/, "");
+      const wsProtocol = baseApiUrl.startsWith("https") ? "wss:" : "ws:";
+      const finalUrl = `${baseApiUrl.replace(/^http/, "ws")}/api/v1/learn/ws/${sessionId}`;
 
-      const finalUrl = wsUrl.toString();
       console.log("Connecting to WebSocket:", finalUrl);
 
       try {
@@ -283,6 +292,14 @@ export function useLearnWebSocket(
         ws.binaryType = "arraybuffer";
 
         ws.onopen = () => {
+          // Double check if this is still the current session we want
+          if (sessionIdRef.current !== sessionId) {
+            console.warn("WebSocket opened for stale session, closing:", sessionId);
+            ws.onclose = null;
+            ws.onerror = null;
+            ws.close();
+            return;
+          }
           console.log("WebSocket connected:", sessionId);
           setState((prev) => ({
             ...prev,
@@ -310,6 +327,9 @@ export function useLearnWebSocket(
         };
 
         ws.onerror = (event) => {
+          // If this socket isn't the current one anymore, ignore errors
+          if (wsRef.current !== ws) return;
+
           console.error("WebSocket error:", event, "URL was:", finalUrl);
           console.error("WebSocket ready state:", ws.readyState);
           setState((prev) => ({
@@ -644,6 +664,14 @@ export function useLearnWebSocket(
         type: "REQUEST_FLASHCARDS",
         session_id: state.sessionId,
       } as RequestFlashcardsEvent);
+    },
+
+    requestCrossword: () => {
+      if (!state.sessionId) return false;
+      return sendMessage({
+        type: "REQUEST_CROSSWORD",
+        session_id: state.sessionId,
+      } as RequestCrosswordEvent);
     },
 
     restoreBoardAction: (action: BoardAction) => {

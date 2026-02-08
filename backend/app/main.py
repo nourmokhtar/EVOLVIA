@@ -55,6 +55,8 @@ app.include_router(collaboration.router, prefix=f"{settings.API_V1_STR}/collabor
 app.include_router(personality.router, prefix=f"{settings.API_V1_STR}/personality", tags=["personality"])
 app.include_router(learn.router, prefix=f"{settings.API_V1_STR}", tags=["learn"])
 app.include_router(evaluations.router, prefix=f"{settings.API_V1_STR}/evaluations", tags=["evaluations"])
+from app.api import language_improvement
+app.include_router(language_improvement.router, prefix=f"{settings.API_V1_STR}/language-improvement", tags=["language_improvement"])
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):

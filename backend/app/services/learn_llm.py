@@ -48,13 +48,18 @@ class LearnLLMService:
     4. Log trace via Opik for observability
     """
 
-    def __init__(self, llm_provider: str = "llama", enable_tracing: bool = True):
+    def __init__(self, llm_provider: str = None, enable_tracing: bool = True):
         """
         Args:
-            llm_provider: "llama" or "gemini"
+            llm_provider: "llama", "gemini", or "token_factory". If None, checks env var.
             enable_tracing: Whether to log traces to Opik
         """
+        # Load from env if not provided
+        if not llm_provider:
+             llm_provider = getattr(settings, "LLM_PROVIDER", os.getenv("LLM_PROVIDER", "llama"))
+
         self.llm_provider = llm_provider
+        logger.info(f"LearnLLMService initialized with provider: {self.llm_provider}")
         self.enable_tracing = enable_tracing
 
     async def generate_teacher_response(
@@ -214,13 +219,11 @@ class LearnLLMService:
         raw_response = await self._call_llm(prompt, student_input="[QUIZ GENERATION]")
         
         # Parse - we expect a JSON payload for the quiz
-        # We reuse _parse_response but we might need to be more aggressive about finding the JSON
         speech_text, board_actions = self._parse_response(raw_response)
         
         # If no quiz action found, try to force it if raw_response looks like JSON
         has_quiz = any(a.kind == BoardActionKind.SHOW_QUIZ for a in board_actions)
         if not has_quiz:
-            # Fallback: try to find the JSON array/object in the raw text and wrap it
             import re
             import json
             json_match = re.search(r'(\{[\s\n]*"questions"[\s\n]*:[\s\n]*\[[\s\S]+?\][\s\n]*\})', raw_response)
@@ -231,14 +234,59 @@ class LearnLLMService:
                 except:
                     pass
 
-        # If still no speech, add a default one or overwrite with the exact phrase requested
         if not speech_text or len(board_actions) > 0:
             speech_text = "It's time to test your knowledge"
 
         return TeacherResponse(
             speech_text=speech_text,
             board_actions=board_actions,
-            language="en" # Quiz is always in English
+            language="en"
+        )
+
+    async def generate_crossword_response(
+        self,
+        session_id: str,
+        lesson_context: str,
+        difficulty_level: int = 1,
+        history: List[dict] = [],
+        session_language: Optional[str] = "english",
+    ) -> TeacherResponse:
+        """
+        Generate words and clues for a crossword puzzle.
+        """
+        prompt = self._build_crossword_prompt(
+            lesson_context=lesson_context,
+            difficulty_level=difficulty_level,
+            history=history,
+            target_language=session_language or "english"
+        )
+
+        # Call LLM
+        raw_response = await self._call_llm(prompt, student_input="[CROSSWORD GENERATION]")
+        
+        # Parse
+        speech_text, board_actions = self._parse_response(raw_response)
+        
+        # Check for SHOW_CROSSWORD action, fallback if needed
+        has_crossword = any(a.kind == "SHOW_CROSSWORD" for a in board_actions)
+        if not has_crossword:
+            import re
+            import json
+            json_match = re.search(r'(\{[\s\n]*"words"[\s\n]*:[\s\n]*\[[\s\S]+?\][\s\n]*\})', raw_response)
+            if json_match:
+                try:
+                    crossword_payload = json.loads(json_match.group(1))
+                    board_actions.append(BoardAction(kind="SHOW_CROSSWORD", payload=crossword_payload))
+                except:
+                    pass
+
+        if not speech_text:
+            speech_text = "Let's challenge your brain with a crossword puzzle!"
+
+        return TeacherResponse(
+            speech_text=speech_text,
+            board_actions=board_actions,
+            language="en"
         )
 
 
@@ -456,6 +504,54 @@ BOARD: [
 SPEECH: I've prepared some flashcards to help you memorize the key concepts. Flip them over to see if you can define them yourself!
 """
 
+    def _build_crossword_prompt(
+        self,
+        lesson_context: str,
+        difficulty_level: int,
+        history: List[dict],
+        target_language: str
+    ) -> str:
+        """
+        Build a prompt specifically for generating a crossword puzzle.
+        """
+        history_summary = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in history[-10:]])
+        
+        return f"""Role: Puzzle Master & Professor.
+Task: Create a challenging Crossword Puzzle based on the provided Context or Discussion History.
+Language: {target_language.upper()} (All clues and answers MUST be in {target_language.upper()}).
+
+STRICT CONTEXT:
+---
+{lesson_context if lesson_context else 'Use Discussion History.'}
+---
+
+DISCUSSION HISTORY:
+---
+{history_summary if history_summary else 'No recent discussion.'}
+---
+
+REQUIREMENTS:
+1. **GENERATE 5-8 WORDS**: Choose 5 to 8 technical keywords from the context.
+2. **CLUES**: Provide a challenging but fair clue for each word.
+3. **NO SYMBOLS**: Answers MUST be single words without spaces, hyphens, or special characters.
+4. **FORMAT**: Return as a 'SHOW_CROSSWORD' board action.
+
+OUTPUT FORMAT:
+BOARD: [
+  {{
+    "kind": "SHOW_CROSSWORD",
+    "payload": {{
+      "words": [
+        {{ "answer": "REACT", "clue": "A JavaScript library for building user interfaces" }},
+        {{ "answer": "PROPS", "clue": "Data passed from parent to child components" }},
+        ...
+      ]
+    }}
+  }}
+]
+SPEECH: Ready for a challenge? I've created a crossword puzzle with key terms from our lesson. Let's see if you can solve it!
+"""
+
     def _check_question_coverage(self, question: str, file_content: str) -> bool:
         """
         Check if the question is covered in the uploaded file content.
@@ -609,25 +705,25 @@ SPEECH: I've prepared some flashcards to help you memorize the key concepts. Fli
             
         return detected
 
-    async def _call_llm(self, prompt: str, student_input: str = "") -> str:
+    async def _call_llm(self, prompt: str, student_input: str = "", system_prompt: Optional[str] = None) -> str:
         """
         Call the LLM provider (Llama, Gemini, or Token Factory).
         Falls back to mock if provider is unavailable.
         """
         try:
             if self.llm_provider == "google":
-                return await self._call_gemini(prompt)
+                return await self._call_gemini(prompt, system_prompt=system_prompt)
             elif self.llm_provider == "llama":
-                return await self._call_llama(prompt)
+                return await self._call_llama(prompt, system_prompt=system_prompt)
             elif self.llm_provider == "token_factory":
-                return await self._call_token_factory(prompt)
+                return await self._call_token_factory(prompt, system_prompt=system_prompt)
             else:
-                return self._mock_response(student_input)
+                return self._mock_response(student_input, is_json=system_prompt and "JSON" in system_prompt)
         except Exception as e:
             print(f"LLM provider {self.llm_provider} failed: {e}. Using mock.")
-            return self._mock_response(student_input)
+            return self._mock_response(student_input, is_json=system_prompt and "JSON" in system_prompt)
 
-    async def _call_gemini(self, prompt: str) -> str:
+    async def _call_gemini(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Call Google Gemini API"""
         try:
             import google.generativeai as genai
@@ -639,24 +735,27 @@ SPEECH: I've prepared some flashcards to help you memorize the key concepts. Fli
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel("gemini-1.5-flash")
             
-            response = model.generate_content(prompt)
+            full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+            response = model.generate_content(full_prompt)
             return response.text
         except ImportError:
             raise ImportError("google-generativeai not installed")
 
-    async def _call_llama(self, prompt: str) -> str:
+    async def _call_llama(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Call Llama via Ollama or compatible endpoint"""
         try:
             # Try local Ollama first, then fallback to other endpoints
             ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
             model_name = os.getenv("LLAMA_MODEL", "llama2")
             
+            full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+            
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{ollama_url}/api/generate",
                     json={
                         "model": model_name,
-                        "prompt": prompt,
+                        "prompt": full_prompt,
                         "stream": False,
                     },
                     timeout=aiohttp.ClientTimeout(total=60),
@@ -669,7 +768,7 @@ SPEECH: I've prepared some flashcards to help you memorize the key concepts. Fli
         except Exception as e:
             raise Exception(f"Llama call failed: {e}")
 
-    async def _call_token_factory(self, prompt: str) -> str:
+    async def _call_token_factory(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """
         Call ESPRIT Token Factory API using OpenAI-compatible client
         
@@ -697,10 +796,12 @@ SPEECH: I've prepared some flashcards to help you memorize the key concepts. Fli
             )
             
             # Call the model
+            sys_content = system_prompt or "You are a patient AI teacher. Detect the language of the user's input and respond in that SAME language (English->English, French->French). Generate responses with exactly two parts: BOARD and SPEECH. Generate BOARD ACTIONS FIRST. Follow the exact format requested."
+            
             response = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "You are a patient AI teacher. Detect the language of the user's input and respond in that SAME language (English->English, French->French). Generate responses with exactly two parts: BOARD and SPEECH. Generate BOARD ACTIONS FIRST. Follow the exact format requested."},
+                    {"role": "system", "content": sys_content},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=4096,
@@ -722,11 +823,25 @@ SPEECH: I've prepared some flashcards to help you memorize the key concepts. Fli
                 pass
             return self._mock_response(getattr(self, '_current_student_input', ''))
 
-    def _mock_response(self, student_input: str = "") -> str:
+    def _mock_response(self, student_input: str = "", is_json: bool = False) -> str:
         """
         Fallback mock response for development/testing.
         Now contextual based on student input.
         """
+        if is_json:
+            # Return valid coaching JSON as mock
+            return json.dumps({
+                "grammar_score": 75,
+                "grammar_feedback": "This is a mock response because the LLM failed.",
+                "vocabulary_score": 80,
+                "vocabulary_feedback": "Good attempt, try using more specific verbs.",
+                "top_priorities": [{"id": "m1", "title": "LLM Mock Mode", "reason": "Provider failed"}],
+                "explanations": [{"priority_id": "m1", "simple_explanation": "The AI is currently in offline mode.", "language_specific_notes": ""}],
+                "micro_drills": [{"priority_id": "m1", "title": "Practice offline", "instructions": "Keep speaking!", "estimated_seconds": 10}],
+                "example_sentences": [{"priority_id": "m1", "sentence": "I am practicing.", "phonetic_hint": ""}],
+                "retry_goal": {"description": "Try again when service is back.", "metrics_target": {"target_fluency_score": 70}}
+            })
+
         # Make the mock response contextual
         if student_input:
             clean_input = student_input.replace("[INTERRUPTION - new question] ", "").replace("[FOLLOW-UP QUESTION after pause] ", "")
@@ -759,6 +874,169 @@ BOARD: [{{"kind": "WRITE_TITLE", "payload": {{"text": "Key Concept"}}}}, {{"kind
         except Exception as e:
             logger.error(f"Error generating title: {e}")
             return "New Discussion"
+
+    async def generate_coaching_feedback(
+        self,
+        transcript: str,
+        fluency_metrics: dict,
+        pronunciation_metrics: dict,
+        language_code: str,
+        user_level: str,
+        goal: str,
+    ) -> dict:
+        """
+        Generate "super intelligent" coaching feedback using the LLM.
+
+        Args:
+            transcript: The full text of what the user said.
+            fluency_metrics: Computed fluency stats (WPM, pauses, fillers).
+            pronunciation_metrics: Heuristic pronunciation issues.
+            language_code: 'en', 'fr', etc.
+            user_level: 'beginner', 'intermediate', 'advanced'
+            goal: User's goal (e.g. 'conversation', 'exam')
+
+        Returns:
+            Dict matching the `CoachPayload` schema.
+        """
+        system_prompt = "Role: Expert Language Coach. Task: Analyze transcription and return structured JSON. No preamble. No BOARD/SPEECH tags."
+        prompt = self._build_coaching_prompt(
+            transcript, fluency_metrics, pronunciation_metrics, language_code, user_level, goal
+        )
+
+        try:
+            raw_response = await self._call_llm(prompt, student_input=transcript[:50], system_prompt=system_prompt)
+
+            # Safety check: if we got the standard teaching mock, it's not valid coaching JSON
+            if "BOARD:" in raw_response and "SPEECH:" in raw_response:
+                raise ValueError("LLM returned standard teaching response instead of coaching JSON")
+
+            return self._parse_coaching_response(raw_response)
+        except Exception as e:
+            logger.error(f"Coaching LLM call failed: {e}")
+            raise  # Let caller switch to heuristic fallback
+
+    def _build_coaching_prompt(
+        self,
+        transcript: str,
+        fluency_metrics: dict,
+        pronunciation_metrics: dict,
+        language_code: str,
+        user_level: str,
+        goal: str,
+    ) -> str:
+        lang_names = {
+            "en": "English", "fr": "French", "es": "Spanish", "it": "Italian", "ar": "Arabic"
+        }
+        target_lang = lang_names.get(language_code, "English")
+
+        # Simplify metrics for prompt to save tokens/noise
+        fluency_summary = {
+            "wpm": int(fluency_metrics.get("speech_rate_wpm", 0)),
+            "pauses": len(fluency_metrics.get("long_pauses", [])),
+            "fillers": sum(fluency_metrics.get("filler_counts", {}).values()),
+            "score": int(fluency_metrics.get("fluency_score", 0))
+        }
+
+        pron_issues = pronunciation_metrics.get("issues_summary", [])
+        pron_score = int(pronunciation_metrics.get("overall_score", 0))
+
+        # Dynamic scoring rubric
+        rubric = ""
+        if user_level == "beginner":
+            rubric += "- GRADE GENTLY. Focus on basic intelligibility. Ignore minor grammar mistakes if meaning is clear.\n"
+            rubric += "- Suggest simple, high-frequency vocabulary improvements.\n"
+        elif user_level == "advanced":
+            rubric += "- GRADE STRICTLY. Penalize for unnatural phrasing, even if grammatically correct.\n"
+            rubric += "- Suggest sophisticated synonyms and idioms.\n"
+        else: # intermediate
+            rubric += "- Grade moderately. Expect correct basic grammar but allow complex errors.\n"
+
+        if goal == "business":
+            rubric += "- Focus on PROFESSIONAL TONE. Penalize slang. Suggest formal alternatives.\n"
+        elif goal == "exam":
+            rubric += "- Focus on PRECISION and RANGE. Highlight repeated words. Suggest academic vocabulary.\n"
+        else: # conversation
+            rubric += "- Focus on FLOW and NATURALNESS. Suggest colloquialisms where appropriate.\n"
+
+        return f"""Role: Expert Language Coach.
+Task: Analyze the user's speech and return a structured JSON coaching report.
+Target Language: {target_lang}
+User Level: {user_level}
+Goal: {goal}
+
+Input Data:
+TRANSCRIPT: "{transcript}"
+FLUENCY: {json.dumps(fluency_summary)}
+PRONUNCIATION_HEURISTICS: {json.dumps(pron_issues)}
+SCORES: Fluency {fluency_summary['score']}/100, Pronunciation {pron_score}/100
+
+Instructions:
+1. Detect specific mispronounced words (phonetic errors), grammar mistakes (conjugation, structure), and awkward phrasing.
+2. Evaluate Grammar and Vocabulary quality (0-100) based on the rubric below.
+3. Be encouraging but precise. "Super intelligent" means catching subtle errors a native speaker would notice.
+4. If the transcript is empty or nonsense, give feedback on speaking up.
+
+SCORING RUBRIC (Must Follow):
+{rubric}
+
+5. IMPORTANT: You MUST output ONLY valid JSON matching this exact schema:
+
+{{
+  "grammar_score": 85,
+  "grammar_feedback": "Mostly correct, but watch out for past tense.",
+  "vocabulary_score": 78,
+  "vocabulary_feedback": "Good use of basics; try more varied adjectives.",
+  "top_priorities": [
+    {{ "id": "p1", "title": "...", "reason": "..." }}
+  ],
+  "explanations": [
+    {{ "priority_id": "p1", "simple_explanation": "...", "language_specific_notes": "..." }}
+  ],
+  "micro_drills": [
+    {{ "priority_id": "p1", "title": "...", "instructions": "...", "estimated_seconds": 30 }}
+  ],
+  "example_sentences": [
+    {{ "priority_id": "p1", "sentence": "...", "phonetic_hint": "..." }}
+  ],
+  "retry_goal": {{
+      "description": "...", 
+      "metrics_target": {{ "target_fluency_score": 85, "max_long_pauses": 2 }} 
+  }}
+}}
+
+Output strictly valid JSON. No markdown fencing necessary, but if used, I will parse it.
+JSON:
+"""
+
+    def _parse_coaching_response(self, raw_response: str) -> dict:
+        """Parse strict JSON from coaching response."""
+        import json
+        import re
+
+        # Clean up markdown code blocks if present
+        clean = raw_response.strip()
+        if clean.startswith("```"):
+            clean = re.sub(r'^```(?:json)?', '', clean)
+            clean = re.sub(r'```$', '', clean)
+        clean = clean.strip()
+
+        try:
+            data = json.loads(clean)
+            # Basic validation of required fields
+            required = [
+                "top_priorities", "explanations", "micro_drills", "retry_goal",
+                "grammar_score", "vocabulary_score"
+            ]
+            for r in required:
+                if r not in data:
+                    raise ValueError(f"Missing key: {r}")
+            return data
+        except json.JSONDecodeError:
+            # Try to find JSON object in text
+            match = re.search(r'(\{[\s\S]+\})', clean)
+            if match:
+                return json.loads(match.group(1))
+            raise
 
     def _parse_response(self, raw_response: str) -> tuple[str, List[BoardAction]]:
         """

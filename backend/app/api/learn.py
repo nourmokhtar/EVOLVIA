@@ -29,6 +29,9 @@ from app.schemas.learn import (
     ToggleVoiceEvent,
     RequestQuizEvent,
     RequestFlashcardsEvent,
+    RequestCrosswordEvent,
+    RequestMiniGameEvent,
+    RequestExerciseEvent,
     HistoryEvent,
     VoiceTranscriptionEvent,
     BoardActionEvent,
@@ -493,79 +496,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 elif event_type == "REQUEST_QUIZ":
                     event = RequestQuizEvent(**event_data)
                     logger.info(f"Quiz requested for session {session_id}")
-                    
-                    # Generate quiz response
-                    lesson_context = session.uploaded_file_content or ""
-                    
-                    response = await llm_service.generate_quiz_response(
-                        session_id=session.session_id,
-                        lesson_context=lesson_context,
-                        student_input="[USER REQUESTED QUIZ]",
-                        difficulty_level=session.difficulty_level,
-                        history=session.history,
-                        session_language=session.language,
-                    )
-                    
-                    # Stream response (Speech + Quiz Action)
-                    # 1. Start Audio Synthesis
-                    async def get_audio():
-                        if not voice_manager: return None
-                        try:
-                            return await voice_manager.synthesize_response(
-                                response.speech_text, 
-                                language=response.language
-                            )
-                        except Exception as e:
-                            logger.error(f"Failed to synthesize audio: {e}")
-                            return None
-                    audio_task = asyncio.create_task(get_audio())
-
-                    # 2. Send Board Actions (The Quiz)
-                    for action in response.board_actions:
-                        await _send_event(
-                            websocket,
-                            BoardActionEvent(
-                                session_id=session.session_id,
-                                action=action,
-                            ),
-                        )
-                        # PERSIST ARTIFACTS (Fix for manual Quiz Request)
-                        if board_action_kind := getattr(BoardActionKind, "SHOW_QUIZ", None):
-                             if action.kind == board_action_kind:
-                                 session.quizzes.append(action.payload)
-                                 session_manager.update_session(session)
-
-                    # 3. Text Delta
-                    words = response.speech_text.split()
-                    for word in words:
-                        await _send_event(
-                            websocket,
-                            TeacherTextDeltaEvent(
-                                session_id=session.session_id,
-                                delta=word + " ",
-                            ),
-                        )
-                        await asyncio.sleep(0.05)
-
-                    # 4. Final Event
-                    audio_data = await audio_task
-                    await _send_event(
-                        websocket,
-                        TeacherTextFinalEvent(
-                            session_id=session.session_id,
-                            text=response.speech_text,
-                            board_actions=response.board_actions,
-                        ),
-                    )
-                    
-                    if audio_data:
-                        await websocket.send_bytes(audio_data)
-
-                    continue
 
                 elif event_type == "REQUEST_FLASHCARDS":
                     event = RequestFlashcardsEvent(**event_data)
                     logger.info(f"Flashcards requested for session {session_id}")
+                elif event_type == "REQUEST_CROSSWORD":
+                    event = RequestCrosswordEvent(**event_data)
+                    logger.info(f"Crossword requested for session {session_id}")
+                elif event_type == "REQUEST_MINIGAME":
+                    event = RequestMiniGameEvent(**event_data)
+                elif event_type == "REQUEST_EXERCISE":
+                    event = RequestExerciseEvent(**event_data)
 
                 else:
                     await _send_event(
@@ -929,24 +870,39 @@ async def _handle_websocket_event(
             )
         
         elif isinstance(event, ResumeEvent):
-            session.resume()
-            await _send_event(
-                websocket,
-                StatusEvent(
-                    session_id=session.session_id,
-                    status=SessionStatus.RESUMING,
-                    difficulty_level=session.difficulty_level,
-                    difficulty_title=session.difficulty_title,
-                ),
-            )
-            session.continue_teaching()
-            await _send_event(
-                websocket,
-                StatusEvent(
-                    session_id=session.session_id,
-                    status=SessionStatus.TEACHING,
-                ),
-            )
+            if session.status == SessionStatus.TEACHING:
+                logger.info(f"Session {session.session_id} is already in TEACHING state. Ignoring RESUME.")
+                return
+
+            try:
+                session.resume()
+                await _send_event(
+                    websocket,
+                    StatusEvent(
+                        session_id=session.session_id,
+                        status=SessionStatus.RESUMING,
+                        difficulty_level=session.difficulty_level,
+                        difficulty_title=session.difficulty_title,
+                    ),
+                )
+                session.continue_teaching()
+                await _send_event(
+                    websocket,
+                    StatusEvent(
+                        session_id=session.session_id,
+                        status=SessionStatus.TEACHING,
+                    ),
+                )
+            except ValueError as e:
+                logger.warning(f"Failed to resume session {session.session_id}: {e}")
+                await _send_event(
+                    websocket,
+                    ErrorEvent(
+                        session_id=session.session_id,
+                        error_code="RESUME_FAILED",
+                        message=str(e),
+                    ),
+                )
         
         elif isinstance(event, ChangeDifficultyEvent):
             session.set_difficulty(event.level)
@@ -970,6 +926,7 @@ async def _handle_websocket_event(
         elif isinstance(event, RequestQuizEvent):
             logger.info(f"Student requested a quiz for session {session.session_id}")
             session.wait_for_answer()
+            session.add_history("user", "[REQUESTED QUIZ]")
             
             # Send status update
             await _send_event(
@@ -986,10 +943,11 @@ async def _handle_websocket_event(
             lesson_context = session.uploaded_file_content or ""
             response = await llm_service.generate_quiz_response(
                 session_id=session.session_id,
-                difficulty_level=session.difficulty_level,
                 lesson_context=lesson_context,
+                student_input="[USER REQUESTED QUIZ]",
+                difficulty_level=session.difficulty_level,
                 history=session.history,
-                target_language=session.language or "english"
+                session_language=session.language or "english"
             )
             
             # Send status: TEACHING
@@ -1057,9 +1015,16 @@ async def _handle_websocket_event(
             if audio_data:
                 await websocket.send_bytes(audio_data)
 
+            # PERSIST HISTORY
+            session.add_history("assistant", response.speech_text)
+            session_manager.update_session(session)
+            session.continue_teaching()
+            session.next_step()
+
         elif isinstance(event, RequestFlashcardsEvent):
             logger.info(f"Student requested flashcards for session {session.session_id}")
             session.wait_for_answer()
+            session.add_history("user", "[REQUESTED FLASHCARDS]")
             
             # Send status update
             await _send_event(
@@ -1135,8 +1100,91 @@ async def _handle_websocket_event(
             if audio_data:
                 await websocket.send_bytes(audio_data)
 
-            # No automatic titling for quiz-only turns
+            # PERSIST HISTORY
             session.add_history("assistant", response.speech_text)
+            session_manager.update_session(session)
+            session.continue_teaching()
+            session.next_step()
+
+        elif isinstance(event, RequestCrosswordEvent):
+            logger.info(f"Student requested a crossword for session {session.session_id}")
+            session.wait_for_answer()
+            session.add_history("user", "[REQUESTED CROSSWORD]")
+            
+            # Send status update
+            await _send_event(
+                websocket,
+                StatusEvent(
+                    session_id=session.session_id,
+                    status=SessionStatus.TEACHING,
+                    difficulty_level=session.difficulty_level,
+                    difficulty_title=session.difficulty_title,
+                ),
+            )
+            
+            # Generate crossword response
+            lesson_context = session.uploaded_file_content or ""
+            response = await llm_service.generate_crossword_response(
+                session_id=session.session_id,
+                difficulty_level=session.difficulty_level,
+                lesson_context=lesson_context,
+                history=session.history,
+                session_language=session.language or "english"
+            )
+            
+            # 1. Synthesize fixed speech immediately
+            try:
+                audio_data = await voice_manager.synthesize_response(
+                    response.speech_text, 
+                    language=response.language
+                )
+            except Exception as e:
+                logger.error(f"Failed to synthesize crossword intro audio: {e}")
+                audio_data = None
+
+            # 2. Stream speech deltas
+            words = response.speech_text.split()
+            for word in words:
+                await _send_event(
+                    websocket,
+                    TeacherTextDeltaEvent(
+                        session_id=session.session_id,
+                        delta=word + " ",
+                    ),
+                )
+                await asyncio.sleep(0.05)
+
+            # 3. Send board actions (The Crossword)
+            for action in response.board_actions:
+                await _send_event(
+                    websocket,
+                    BoardActionEvent(
+                        session_id=session.session_id,
+                        action=action,
+                    ),
+                )
+
+                # For now, Crossword is a visual game, we can persist if needed
+                # But typically we don't save the full game state in 'artifacts' yet
+                # unless we want to show it in Study Hub later.
+
+            # 4. Send final speech event
+            await _send_event(
+                websocket,
+                TeacherTextFinalEvent(
+                    session_id=session.session_id,
+                    text=response.speech_text,
+                    board_actions=response.board_actions,
+                ),
+            )
+
+            # 5. Send audio binary
+            if audio_data:
+                await websocket.send_bytes(audio_data)
+
+            # PERSIST HISTORY
+            session.add_history("assistant", response.speech_text)
+            session_manager.update_session(session)
             session.continue_teaching()
             session.next_step()
         

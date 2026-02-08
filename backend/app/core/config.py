@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Groq API Key (for agents)
     GROQ_API_KEY: str = ""
 
+    # LLM Provider
+    LLM_PROVIDER: str = "token_factory"
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 
 settings = Settings()

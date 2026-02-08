@@ -45,24 +45,14 @@ export default function Dashboard() {
     // Fetch sessions to count unique courses
     const fetchStats = async () => {
       try {
-        const response = await fetch('http://127.0.0.1:8000/api/v1/learn/sessions');
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const response = await fetch(`${apiUrl}/api/v1/learn/sessions`);
         if (response.ok) {
           const sessions = await response.json();
 
-          // Logic: unique (lesson_id || uploaded_file_name || session_id if free discussion)
-          const uniqueCourses = new Set();
-          sessions.forEach((s: any) => {
-            if (s.lesson_id) {
-              uniqueCourses.add(`lesson-${s.lesson_id}`);
-            } else if (s.uploaded_file_name) {
-              uniqueCourses.add(`file-${s.uploaded_file_name}`);
-            } else {
-              // Free discussion without specific lesson/file - unique per session
-              uniqueCourses.add(`session-${s.session_id}`);
-            }
-          });
-
-          setCourseCount(uniqueCourses.size);
+          // Logic: count sessions that have an uploaded file
+          const sessionsWithFiles = sessions.filter((s: any) => s.uploaded_file_name);
+          setCourseCount(sessionsWithFiles.length);
         }
       } catch (error) {
         console.error("Failed to fetch dashboard stats:", error);

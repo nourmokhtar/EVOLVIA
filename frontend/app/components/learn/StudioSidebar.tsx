@@ -7,7 +7,8 @@ import {
     BrainCircuit,
     Layers,
     History as HistoryIcon,
-    GalleryVerticalEnd
+    GalleryVerticalEnd,
+    Grid3X3
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +16,7 @@ interface StudioSidebarProps {
     onAction: (action: string, label?: string) => void;
     onStartQuiz?: () => void;
     onStartFlashcards?: () => void;
+    onStartCrossword?: () => void;
     onOpenStudyHub?: () => void;
     disabled: boolean;
     hasActiveUpload?: boolean;
@@ -24,6 +26,7 @@ export function StudioSidebar({
     onAction,
     onStartQuiz,
     onStartFlashcards,
+    onStartCrossword,
     onOpenStudyHub,
     disabled,
     hasActiveUpload = false,
@@ -58,6 +61,13 @@ export function StudioSidebar({
             prompt: "[QUIZ]",
         },
         {
+            id: "crossword",
+            label: "Crossword",
+            desc: "Play a crossword puzzle",
+            icon: Grid3X3,
+            prompt: "[CROSSWORD]",
+        },
+        {
             id: "summary",
             label: "Summarize",
             icon: FileText,
@@ -84,6 +94,8 @@ export function StudioSidebar({
                                 onStartQuiz();
                             } else if (action.id === "flashcards" && onStartFlashcards) {
                                 onStartFlashcards();
+                            } else if (action.id === "crossword" && onStartCrossword) {
+                                onStartCrossword();
                             } else {
                                 onAction(action.prompt, action.label);
                             }
