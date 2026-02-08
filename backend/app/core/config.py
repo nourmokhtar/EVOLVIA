@@ -2,6 +2,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 import os
 from pydantic import Field
+from dotenv import load_dotenv
+
+# Load environment variables from .env file explicitly for os.getenv defaults
+load_dotenv()
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = os.getenv("PROJECT_NAME", "AI Virtual Closet")
@@ -10,7 +14,7 @@ class Settings(BaseSettings):
     # "/api/v1"
     SECRET_KEY: str = os.getenv("SECRET_KEY", "")
     # "YOUR_SUPER_SECRET_KEY_CHANGE_ME"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 11520
     
     # Database - SQLite by default (no installation needed)
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./virtual_closet.db")
@@ -38,13 +42,9 @@ class Settings(BaseSettings):
     USE_OLLAMA_FOR_PERSONALITY: bool = os.getenv("USE_OLLAMA_FOR_PERSONALITY", "true").lower() == "true"
     # True
     # Configure Opik for observability and tracing
-    opik_api_key:str = os.getenv("OPIK_API_KEY", "KlHeYE6IiENcxZkxf2gAXkc90")
-   
-    # os.getenv("OPIK_API_KEY")
-    opik_project_name:str = os.getenv("OPIK_PROJECT_NAME", "or-ro")
-    opik_workspace:str = os.getenv("OPIK_WORKSPACE", "test")
-    # "nour-mokhtar-1235"
-    # "evolvia-coaching-platform"
+    opik_api_key: str = os.getenv("OPIK_API_KEY", "")
+    opik_project_name: str = os.getenv("OPIK_PROJECT_NAME", "ai-virtual-closet")
+    opik_workspace: str = os.getenv("OPIK_WORKSPACE", "")
 
 
 

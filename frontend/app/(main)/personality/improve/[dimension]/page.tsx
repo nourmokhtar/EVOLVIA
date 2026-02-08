@@ -393,7 +393,7 @@ export default function ImproveDimensionPage() {
     const handleFinalReassessment = async (finalEntries: string[]) => {
         setIsSubmitting(true);
         try {
-            const response = await axios.post('http://localhost:8000/api/puzzle/reassess', {
+            const response = await axios.post('http://localhost:8000/api/v1/puzzle/reassess', {
                 dimension: dimension,
                 entries: finalEntries,
                 current_score: 50
