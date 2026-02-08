@@ -16,6 +16,8 @@ import {
     ChevronLeft,
     ChevronRight,
     Send,
+    Loader2,
+    CheckCircle2,
     BrainCircuit,
     FileText
 } from 'lucide-react';
@@ -572,48 +574,345 @@ function PitchSimulator({ onBack }: { onBack: () => void }) {
 }
 
 function CollaborationSimulator({ onBack }: { onBack: () => void }) {
+    const [sessionId, setSessionId] = useState<string | null>(null);
+    const [scenarioTitle, setScenarioTitle] = useState<string>('');
+    const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant', content: string }>>([]);
+    const [userInput, setUserInput] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [isCompleted, setIsCompleted] = useState(false);
+    const [finalEvaluation, setFinalEvaluation] = useState<any>(null);
+    const [turnIndex, setTurnIndex] = useState(0);
+    const [showResults, setShowResults] = useState(false);
+    const [renderKey, setRenderKey] = useState(0);
+
+    const startSession = async () => {
+        setIsLoading(true);
+        try {
+            // Randomly select from available scenarios
+            const scenarios = ['scenario_001', 'scenario_002', 'scenario_003', 'scenario_004'];
+            const randomScenario = scenarios[Math.floor(Math.random() * scenarios.length)];
+
+            const response = await fetch(API.collaboration.start, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scenario_id: randomScenario })
+            });
+            const data = await response.json();
+            setSessionId(data.session_id);
+            setScenarioTitle(data.scenario_title);
+            setMessages([{ role: 'assistant', content: data.npc_message }]);
+            setTurnIndex(data.turn_index);
+        } catch (error) {
+            console.error('Failed to start session:', error);
+        }
+        setIsLoading(false);
+    };
+
+    const sendTurn = async (message?: string) => {
+        const messageToSend = message || userInput;
+        if (!sessionId || !messageToSend.trim()) return;
+
+        setIsLoading(true);
+        const newMessages = [...messages, { role: 'user' as const, content: messageToSend }];
+        setMessages(newMessages);
+        setUserInput('');
+
+        try {
+            console.log('Sending turn to:', API.collaboration.turn);
+            console.log('Request payload:', { session_id: sessionId, user_message: messageToSend });
+
+            const response = await fetch(API.collaboration.turn, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId, user_message: messageToSend })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const data = await response.json();
+            if (data.status === 'completed') {
+                console.log('COMPLETED! Final evaluation data:', data.final_evaluation);
+                console.log('Setting isCompleted to true and finalEvaluation');
+                setIsCompleted(true);
+                setFinalEvaluation(data.final_evaluation);
+                // Alert for debugging
+                // alert(`Simulation Completed! Status: ${data.status}, Has Eval: ${!!data.final_evaluation}`);
+
+                setShowResults(true);
+                if (data.npc_reply && !messageToSend.includes("End Simulation") && !messageToSend.includes("summary")) {
+                    setMessages([...newMessages, { role: 'assistant' as const, content: data.npc_reply }]);
+                }
+                console.log('State should be updated now - isCompleted:', true, 'finalEvaluation:', data.final_evaluation);
+            } else {
+                setMessages([...newMessages, { role: 'assistant' as const, content: data.npc_reply }]);
+                setTurnIndex(data.turn_index);
+            }
+        } catch (error) {
+            console.error('Failed to send turn:', error);
+            alert(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+        setIsLoading(false);
+    };
+
+    const handleKeyPress = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' && !isLoading) {
+            sendTurn();
+        }
+    };
+
+    if (!sessionId) {
+        return (
+            <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
+                <div className="flex items-center justify-between">
+                    <button onClick={onBack} className="text-muted-foreground hover:text-foreground flex items-center gap-2">
+                        <ChevronLeft className="w-5 h-5" /> All Simulations
+                    </button>
+                    <span className="text-xs font-bold text-accent uppercase tracking-widest px-3 py-1 bg-accent/10 rounded-full">Team Conflict Scenario</span>
+                </div>
+
+                <div className="glass-card p-12 text-center">
+                    <Users className="w-16 h-16 text-secondary mx-auto mb-6" />
+                    <h2 className="text-2xl font-bold mb-4">Ready for Collaboration Practice?</h2>
+                    <p className="text-muted-foreground mb-8">Start a scenario to practice empathy and conflict resolution skills.</p>
+                    <button onClick={startSession} disabled={isLoading} className="btn-primary">
+                        {isLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Play className="w-4 h-4 mr-2" />}
+                        Start Scenario
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    console.log('RENDER CHECK: isCompleted =', isCompleted, 'finalEvaluation =', finalEvaluation, 'showResults =', showResults);
+    console.log('finalEvaluation object:', finalEvaluation);
+    // If session is completed, SHOW RESULTS (or loading if data missing)
+    // We prioritize this over the chat view to prevent falling back to chat
+    if (isCompleted) {
+        if (!finalEvaluation) {
+            return (
+                <div className="max-w-4xl mx-auto space-y-8 animate-fade-in-up">
+                    <div className="glass-card p-12 text-center flex flex-col items-center justify-center">
+                        <Loader2 className="w-12 h-12 text-primary animate-spin mb-4" />
+                        <h2 className="text-xl font-bold">Loading Results...</h2>
+                    </div>
+                </div>
+            );
+        }
+
+        return (
+            <div className="max-w-4xl mx-auto space-y-8 animate-fade-in-up">
+                <div className="flex items-center justify-between">
+                    <button onClick={onBack} className="text-muted-foreground hover:text-foreground flex items-center gap-2 transition-colors">
+                        <ChevronLeft className="w-5 h-5" /> Back to Practice
+                    </button>
+                    <div className="flex items-center gap-3">
+                        <span className="text-[10px] font-bold text-green-500 uppercase tracking-[0.2em] px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full">Session Archived</span>
+                        <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center glow-primary">
+                            <CheckCircle2 className="w-4 h-4 text-primary" />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    <div className="md:col-span-2 space-y-6">
+                        <div className="glass-card p-8 bg-premium-gradient border-primary/20 relative overflow-hidden">
+                            <div className="absolute top-0 right-0 p-4 opacity-10">
+                                <Sparkles className="w-24 h-24 text-primary" />
+                            </div>
+                            <h2 className="text-3xl font-bold font-heading mb-2 text-gradient">Performance Summary</h2>
+                            <p className="text-muted-foreground mb-8 text-sm">Evidence-based analysis of your collaborative behavior across the session.</p>
+
+                            <div className="space-y-8">
+                                <div className="space-y-4">
+                                    <h3 className="font-bold flex items-center gap-2 text-sm uppercase tracking-widest text-primary">
+                                        <ShieldCheck className="w-4 h-4" /> Mastery Level
+                                    </h3>
+                                    <div className="grid grid-cols-3 gap-4">
+                                        {Object.entries(finalEvaluation.scores || {}).map(([key, value]) => (
+                                            <div key={key} className="glass-morphism p-4 text-center group hover:border-primary/50 transition-all">
+                                                <div className="text-3xl font-bold text-white mb-1">{Math.round(value as number)}%</div>
+                                                <div className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest">{key}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                    <div className="space-y-4">
+                                        <h4 className="font-bold text-xs uppercase tracking-widest text-secondary">Strengths Identified</h4>
+                                        <ul className="space-y-3">
+                                            {(finalEvaluation.feedback?.what_you_did_well || []).map((item: string, i: number) => (
+                                                <li key={i} className="flex gap-3 text-sm text-foreground/80 leading-relaxed items-start">
+                                                    <div className="mt-1 w-1.5 h-1.5 rounded-full bg-secondary flex-shrink-0" />
+                                                    {item}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <h4 className="font-bold text-xs uppercase tracking-widest text-accent">Optimization Areas</h4>
+                                        <ul className="space-y-3">
+                                            {(finalEvaluation.feedback?.what_to_improve || []).map((item: string, i: number) => (
+                                                <li key={i} className="flex gap-3 text-sm text-foreground/80 leading-relaxed items-start">
+                                                    <div className="mt-1 w-1.5 h-1.5 rounded-full bg-accent flex-shrink-0" />
+                                                    {item}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="glass-card p-6 bg-white/5 border-white/5">
+                            <h3 className="font-bold mb-4 flex items-center gap-2">
+                                <History className="w-4 h-4 text-muted-foreground" /> Notable Moment (Evidence)
+                            </h3>
+                            <div className="p-4 rounded-2xl bg-black/20 italic text-sm text-muted-foreground border-l-2 border-primary">
+                                "{finalEvaluation.feedback?.quotes?.[0] || "Your closing summary effectively synthesized the team's shared goals."}"
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-6">
+                        <div className="glass-card p-6 bg-accent/5 border-accent/20">
+                            <h3 className="font-bold mb-4 flex items-center gap-2 text-accent">
+                                <Zap className="w-4 h-4" /> Next Strategic Step
+                            </h3>
+                            <p className="text-sm text-muted-foreground leading-relaxed mb-6">
+                                {finalEvaluation.feedback?.next_drill_suggestion || 'Based on your empathy markers, we suggest a high-tension conflict scenario next.'}
+                            </p>
+                            <button className="btn-primary w-full py-3 text-xs" onClick={onBack}>
+                                Begin Next Module
+                            </button>
+                        </div>
+
+                        <div className="glass-morphism p-6 text-center">
+                            <p className="text-xs text-muted-foreground mb-4 font-medium uppercase tracking-widest">Share Achievement</p>
+                            <div className="flex justify-center gap-3">
+                                {[1, 2, 3].map(i => (
+                                    <div key={i} className="w-10 h-10 rounded-full bg-white/5 border border-white/10 hover:border-primary/50 transition-colors cursor-pointer" />
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
-        <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
+        <div key={`simulation-${renderKey}`} className="max-w-5xl mx-auto space-y-6 animate-fade-in-up">
             <div className="flex items-center justify-between">
-                <button onClick={onBack} className="text-muted-foreground hover:text-foreground flex items-center gap-2">
-                    <ChevronLeft className="w-5 h-5" /> All Simulations
+                <button onClick={onBack} className="text-muted-foreground hover:text-foreground flex items-center gap-2 group transition-colors">
+                    <ChevronLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" /> Exit Session
                 </button>
-                <span className="text-xs font-bold text-accent uppercase tracking-widest px-3 py-1 bg-accent/10 rounded-full">Team Conflict Scenario</span>
+                <div className="flex items-center gap-4">
+                    <div className="flex flex-col items-end">
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em] mb-1">Collaboration Phase</span>
+                        <div className="flex gap-1">
+                            {[...Array(10)].map((_, i) => (
+                                <div key={i} className={cn(
+                                    "w-4 h-1 rounded-full bg-white/5",
+                                    i < turnIndex + 1 ? "bg-primary glow-primary" : ""
+                                )} />
+                            ))}
+                        </div>
+                    </div>
+                </div>
             </div>
 
-            <div className="glass-card flex flex-col h-[600px] overflow-hidden">
-                <div className="p-6 border-b border-border bg-surface/50">
-                    <h2 className="text-xl font-bold font-heading">Scenario: The Missed Deadline</h2>
-                    <p className="text-sm text-muted-foreground">A teammate missed a deadline. How do you address this without damaging morale?</p>
-                </div>
-                <div className="flex-1 p-8 overflow-y-auto space-y-6 no-scrollbar bg-slate-900/50">
-                    <div className="flex gap-4">
-                        <div className="w-10 h-10 rounded-xl bg-secondary/20 flex-shrink-0 flex items-center justify-center">
-                            <Users className="w-6 h-6 text-secondary" />
-                        </div>
-                        <div className="glass-card p-4 bg-white/5 border-white/10 max-w-[80%]">
-                            <p className="text-sm font-bold text-secondary mb-1">Teammate (AI)</p>
-                            <p className="text-sm leading-relaxed">"Look, I know I'm late with the report. I've been overwhelmed with other tasks. It's not my fault the manager added extra work!"</p>
+            <div className="glass-card flex flex-col h-[700px] overflow-hidden bg-premium-gradient border-primary/20 shadow-2xl">
+                <div className="px-8 py-6 border-b border-white/10 bg-black/20 flex items-center justify-between">
+                    <div>
+                        <h2 className="text-2xl font-bold font-heading text-gradient">{scenarioTitle}</h2>
+                        <div className="flex items-center gap-2 mt-1">
+                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                            <p className="text-xs text-muted-foreground font-medium uppercase tracking-widest">Live Simulation Active</p>
                         </div>
                     </div>
-                    <div className="pt-12 text-center text-muted-foreground italic text-sm">
-                        Waiting for your response...
-                    </div>
                 </div>
-                <div className="p-6 bg-surface/80 border-t border-border mt-auto">
-                    <div className="flex gap-2 mb-4">
-                        {["Empathize", "Address Accountability", "Find Solution", "Escalate"].map(action => (
-                            <button key={action} className="px-4 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-xs font-bold transition-all">
-                                {action}
-                            </button>
-                        ))}
+
+                <div className="flex-1 p-8 overflow-y-auto space-y-8 no-scrollbar scroll-smooth">
+                    {messages.map((msg, index) => (
+                        <div key={index} className={cn(
+                            "flex gap-4 animate-fade-in-up",
+                            msg.role === 'user' ? 'justify-end' : ''
+                        )} style={{ animationDelay: `${index * 0.1}s` }}>
+                            {msg.role === 'assistant' && (
+                                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-secondary to-accent flex-shrink-0 flex items-center justify-center shadow-lg transform rotate-[-5deg]">
+                                    <Users className="w-6 h-6 text-white" />
+                                </div>
+                            )}
+                            <div className={cn(
+                                "p-5 rounded-3xl max-w-[75%] relative shadow-xl backdrop-blur-md",
+                                msg.role === 'user'
+                                    ? 'bg-primary/20 border border-primary/30 rounded-tr-none'
+                                    : 'bg-white/5 border border-white/10 rounded-tl-none'
+                            )}>
+                                <span className={cn(
+                                    "absolute top-[-22px] text-[10px] font-bold uppercase tracking-widest",
+                                    msg.role === 'user' ? 'right-0 text-primary' : 'left-0 text-secondary'
+                                )}>
+                                    {msg.role === 'user' ? 'Candidate' : 'Teammate'}
+                                </span>
+                                <p className="text-[15px] leading-relaxed text-foreground/90 font-medium">{msg.content}</p>
+                            </div>
+                            {msg.role === 'user' && (
+                                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary to-secondary flex-shrink-0 flex items-center justify-center shadow-lg transform rotate-[5deg]">
+                                    <MessageSquare className="w-6 h-6 text-white" />
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                    {isLoading && (
+                        <div className="flex gap-4 animate-pulse">
+                            <div className="w-12 h-12 rounded-2xl bg-white/5 flex-shrink-0 flex items-center justify-center border border-white/10">
+                                <Loader2 className="w-6 h-6 text-secondary animate-spin" />
+                            </div>
+                            <div className="p-5 rounded-3xl bg-white/5 border border-white/10 rounded-tl-none flex gap-1.5 items-center">
+                                <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" />
+                                <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:0.2s]" />
+                                <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:0.4s]" />
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                <div className="p-8 bg-black/30 border-t border-white/10 backdrop-blur-xl">
+                    <div className="flex items-center gap-4 mb-4">
+                        <button
+                            onClick={() => sendTurn("end this simulation")}
+                            disabled={isLoading}
+                            className="text-[10px] font-bold text-red-400 hover:text-red-300 uppercase tracking-widest flex items-center gap-2 transition-colors disabled:opacity-30"
+                        >
+                            <Zap className="w-3 h-3" /> Terminate Session Early
+                        </button>
+                        <div className="h-px flex-1 bg-white/5" />
                     </div>
-                    <div className="relative">
-                        <input placeholder="Type your response or choose an action..." className="w-full bg-background border border-border rounded-xl py-3 px-4 text-sm" />
-                        <button className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg bg-primary/20 text-primary">
+
+                    <div className="relative group">
+                        <input
+                            value={userInput}
+                            onChange={(e) => setUserInput(e.target.value)}
+                            onKeyPress={handleKeyPress}
+                            placeholder="Formulate your response..."
+                            disabled={isLoading}
+                            className="w-full bg-black/40 border border-white/10 focus:border-primary/50 rounded-2xl py-5 px-6 text-sm outline-none transition-all placeholder:text-muted-foreground/30 pr-16 shadow-inner"
+                        />
+                        <button
+                            onClick={() => sendTurn()}
+                            disabled={isLoading || !userInput.trim()}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl bg-primary/20 text-primary hover:bg-primary hover:text-white transition-all disabled:opacity-30 flex items-center justify-center"
+                        >
                             <Send className="w-4 h-4" />
                         </button>
                     </div>
+                    <p className="mt-3 text-[10px] text-muted-foreground/40 text-center uppercase tracking-[0.2em]">
+                        AI analysis considers tone, empathy, and solution clarity
+                    </p>
                 </div>
             </div>
         </div>

@@ -1,5 +1,5 @@
 // API Configuration
-export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://evolvia-backend.onrender.com';
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // Evolvia API Endpoints
 export const API = {
@@ -25,5 +25,9 @@ export const API = {
   },
   languageImprovement: {
     analyze: `${API_URL}/api/v1/language-improvement/analyze`,
+  },
+  collaboration: {
+    start: `${API_URL}/api/v1/collaboration/start`,
+    turn: `${API_URL}/api/v1/collaboration/turn`,
   },
 };

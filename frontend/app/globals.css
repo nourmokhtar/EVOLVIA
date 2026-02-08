@@ -19,6 +19,100 @@
   --font-body: var(--font-inter), sans-serif;
   --font-handwriting-title: "Gloria Hallelujah", cursive;
   --font-handwriting-body: "Playwrite FR Trad", cursive;
+
+  --animate-gradient-x: gradient-x 15s ease infinite;
+  --animate-float: float 6s ease-in-out infinite;
+  --animate-fade-in-up: fade-in-up 0.6s ease-out forwards;
+  --animate-teacher-float: teacher-float 4s ease-in-out infinite;
+  --animate-teacher-talk: teacher-talk 0.15s ease-in-out infinite;
+  --animate-fadeIn: fadeIn 0.4s ease-out forwards;
+  --animate-bounce-subtle: bounce-subtle 3s ease-in-out infinite;
+
+  @keyframes gradient-x {
+
+    0%,
+    100% {
+      background-position: 0% 50%;
+    }
+
+    50% {
+      background-position: 100% 50%;
+    }
+  }
+
+  @keyframes float {
+
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  @keyframes fade-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes teacher-float {
+
+    0%,
+    100% {
+      transform: translateY(0) rotate(0deg);
+    }
+
+    50% {
+      transform: translateY(-5px) rotate(0.5deg);
+    }
+  }
+
+  @keyframes teacher-talk {
+
+    0%,
+    100% {
+      transform: scaleY(0.2) scaleX(0.9);
+      opacity: 0.8;
+    }
+
+    50% {
+      transform: scaleY(1.5) scaleX(1.1);
+      opacity: 1;
+    }
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(5px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes bounce-subtle {
+
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+
+    50% {
+      transform: translateY(-4px);
+    }
+  }
 }
 
 :root {
@@ -50,22 +144,83 @@
   }
 
   body {
-    @apply bg-background text-foreground font-body antialiased transition-colors duration-300;
+    @apply bg-background text-foreground antialiased transition-colors duration-300;
+    font-family: var(--font-body);
   }
 }
 
 @layer components {
   .glass-card {
-    @apply bg-card-bg backdrop-blur-md border border-border rounded-2xl shadow-lg transition-all duration-300 hover:translate-y-[-4px] hover:shadow-xl;
+    @apply bg-card-bg backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl transition-all duration-500 hover:translate-y-[-6px] hover:shadow-primary/20 hover:border-primary/30;
+  }
+
+  .glass-morphism {
+    @apply bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl shadow-inner;
   }
 
   .btn-primary {
-    @apply bg-gradient-to-r from-primary to-secondary text-white px-6 py-3 rounded-xl font-semibold transition-opacity hover:opacity-90 active:scale-95 flex items-center justify-center gap-2;
+    @apply bg-gradient-to-br from-primary via-secondary to-accent text-white px-8 py-4 rounded-2xl font-bold tracking-wide transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-primary/20 flex items-center justify-center gap-2 disabled:opacity-50;
   }
 
   .text-gradient {
-    @apply bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent inline-block;
+    @apply bg-gradient-to-r from-primary via-secondary to-accent bg-clip-text text-transparent;
+    background-size: 200% 200%;
+    animation: var(--animate-gradient-x);
   }
+
+  .bg-premium-gradient {
+    @apply bg-gradient-to-br from-[#0f172a] via-[#1e293b] to-[#0f172a];
+  }
+}
+
+.animate-gradient-x {
+  background-size: 200% 200%;
+  animation: var(--animate-gradient-x);
+}
+
+.animate-float {
+  animation: var(--animate-float);
+}
+
+.animate-fade-in-up {
+  animation: var(--animate-fade-in-up);
+}
+
+.animate-teacher-float {
+  animation: var(--animate-teacher-float);
+}
+
+.animate-teacher-talk {
+  animation: var(--animate-teacher-talk);
+}
+
+.animate-fadeIn {
+  animation: var(--animate-fadeIn);
+}
+
+.animate-bounce-subtle {
+  animation: var(--animate-bounce-subtle);
+}
+
+@utility font-heading {
+  font-family: var(--font-heading);
+}
+
+@utility font-body {
+  font-family: var(--font-body);
+}
+
+@utility font-handwriting-title {
+  font-family: var(--font-handwriting-title);
+}
+
+@utility font-handwriting-body {
+  font-family: var(--font-handwriting-body);
+}
+
+/* Custom glow effect */
+.glow-primary {
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.2);
 }
 
 /* Hide scrollbar but keep functionality */
@@ -76,70 +231,4 @@
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
-}
-
-@keyframes teacher-float {
-
-  0%,
-  100% {
-    transform: translateY(0) rotate(0deg);
-  }
-
-  50% {
-    transform: translateY(-5px) rotate(0.5deg);
-  }
-}
-
-@keyframes teacher-talk {
-
-  0%,
-  100% {
-    transform: scaleY(0.2) scaleX(0.9);
-    opacity: 0.8;
-  }
-
-  50% {
-    transform: scaleY(1.5) scaleX(1.1);
-    opacity: 1;
-  }
-}
-
-.animate-teacher-float {
-  animation: teacher-float 4s ease-in-out infinite;
-}
-
-.animate-teacher-talk {
-  animation: teacher-talk 0.15s ease-in-out infinite;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-fadeIn {
-  animation: fadeIn 0.4s ease-out forwards;
-}
-
-@keyframes bounce-subtle {
-
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-
-  50% {
-    transform: translateY(-4px);
-  }
-}
-
-.animate-bounce-subtle {
-  animation: bounce-subtle 3s ease-in-out infinite;
 }

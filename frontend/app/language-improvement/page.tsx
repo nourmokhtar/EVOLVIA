@@ -92,7 +92,11 @@ const LANGUAGE_LABELS: Record<LanguageCode, string> = {
   ar: "العربية",
 };
 
-export default function LanguageImprovementPage() {
+import { Suspense } from "react";
+
+// ... (existing imports)
+
+function LanguageImprovementContent() {
   const searchParams = useSearchParams();
   const lessonId = searchParams.get("lesson") || "lesson-001";
   const initialLang = (searchParams.get("lang") as LanguageCode) || "en";
@@ -589,5 +593,17 @@ export default function LanguageImprovementPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function LanguageImprovementPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    }>
+      <LanguageImprovementContent />
+    </Suspense>
   );
 }

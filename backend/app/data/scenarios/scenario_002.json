@@ -1,0 +1,18 @@
+{
+  "id": "scenario_002",
+  "title": "Resource allocation conflict",
+  "npc_name": "Jordan",
+  "role": "team_lead",
+  "initial_npc_message": "I need those reports done by EOD, but I see you've got multiple projects on your plate. How do we prioritize this?",
+  "context": "You are a team member; Jordan is your team lead under pressure from upper management.",
+  "objectives": [
+    "Express capacity concerns clearly",
+    "Propose realistic alternatives",
+    "Seek mutual agreement on priorities"
+  ],
+  "max_turns": 10,
+  "characters": [{"name": "Jordan", "role": "team_lead"}],
+  "hidden_constraints": ["Tight deadline pressure", "Multiple competing priorities"],
+  "success_criteria": ["Capacity concerns expressed", "Alternatives proposed", "Agreement reached"],
+  "resolution_conditions": ["Team member communicates limits", "Lead acknowledges constraints", "Priorities mutually agreed"]
+}

@@ -1,0 +1,18 @@
+{
+  "id": "scenario_003",
+  "title": "Feedback delivery challenge",
+  "npc_name": "Sarah",
+  "role": "direct_report",
+  "initial_npc_message": "Hey, I was wondering if we could chat about my recent project work. I've been putting in extra hours but feel like it's not being recognized.",
+  "context": "You are Sarah's manager; she wants feedback but is sensitive to criticism.",
+  "objectives": [
+    "Deliver constructive feedback empathetically",
+    "Balance positive and improvement areas",
+    "Agree on development goals"
+  ],
+  "max_turns": 10,
+  "characters": [{"name": "Sarah", "role": "direct_report"}],
+  "hidden_constraints": ["Employee sensitive to criticism", "Need for balanced feedback"],
+  "success_criteria": ["Empathy shown", "Constructive feedback given", "Development goals agreed"],
+  "resolution_conditions": ["Manager acknowledges effort", "Feedback delivered constructively", "Goals set collaboratively"]
+}

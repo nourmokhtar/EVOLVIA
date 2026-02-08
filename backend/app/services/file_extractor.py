@@ -47,21 +47,22 @@ class FileExtractor:
     
     @staticmethod
     async def _extract_pdf(file_content: bytes) -> Optional[str]:
-        """Extract text from PDF file"""
+        """Extract text from PDF file using pymupdf (fitz)"""
         try:
-            import PyPDF2
+            import fitz
             import io
             
             pdf_file = io.BytesIO(file_content)
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            doc = fitz.open(stream=pdf_file, filetype="pdf")
             
             text_parts = []
-            for page in pdf_reader.pages:
-                text_parts.append(page.extract_text())
+            for page in doc:
+                text_parts.append(page.get_text())
             
+            doc.close()
             return '\n\n'.join(text_parts)
         except ImportError:
-            logger.warning("PyPDF2 not installed. Install with: pip install PyPDF2")
+            logger.warning("pymupdf not installed. Install with: pip install pymupdf")
             return None
         except Exception as e:
             logger.error(f"Error extracting PDF: {e}")

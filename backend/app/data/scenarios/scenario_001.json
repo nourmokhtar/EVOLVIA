@@ -1,0 +1,19 @@
+
+{
+  "id": "scenario_001",
+  "title": "Team member pushed back on deadline",
+  "npc_name": "Alex",
+  "role": "team_member",
+  "initial_npc_message": "I can't believe we're expected to finish that on Friday. That's impossible with my current workload.",
+  "context": "You are the project lead; Alex is worried about capacity and the deadline.",
+  "objectives": [
+    "Acknowledge Alex's feelings",
+    "Clarify constraints and propose options",
+    "Agree a clear next step and owner"
+  ],
+  "max_turns": 10,
+  "characters": [{"name": "Alex", "role": "team_member"}],
+  "hidden_constraints": ["Limited team capacity", "Fixed deadline"],
+  "success_criteria": ["Empathy shown", "Solution proposed", "Commitment made"],
+  "resolution_conditions": ["User acknowledges feelings", "User proposes realistic plan", "Both parties agree on next steps"]
+}

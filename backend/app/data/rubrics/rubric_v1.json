@@ -1,0 +1,12 @@
+{
+  "criteria": {
+    "empathy": { "weight": 1 },
+    "clarity": { "weight": 1 },
+    "commitment": { "weight": 1 }
+  },
+  "signals": [
+    "acknowledges_feelings",
+    "offers_solution",
+    "sets_clear_next_steps"
+  ]
+}

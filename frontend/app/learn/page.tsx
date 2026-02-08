@@ -47,7 +47,11 @@ interface Message {
   quiz?: any; // payload for inline quiz
 }
 
-export default function LearnPage() {
+import { Suspense } from "react";
+
+// ... (existing imports)
+
+function LearnContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const lessonId = searchParams.get("lesson") || "lesson-001";
@@ -1300,5 +1304,17 @@ export default function LearnPage() {
         />
       )}
     </div >
+  );
+}
+
+export default function LearnPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex h-screen items-center justify-center bg-black/50 backdrop-blur-md">
+        <Loader className="w-10 h-10 animate-spin text-primary" />
+      </div>
+    }>
+      <LearnContent />
+    </Suspense>
   );
 }
