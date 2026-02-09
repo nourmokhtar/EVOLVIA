@@ -26,5 +26,7 @@ soundfile>=0.12.0
 email-validator>=2.0.0
 opik>=1.0.0
 groq>=0.3.0
+PyMuPDF 
 fitz
+
 
