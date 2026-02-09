@@ -22,7 +22,7 @@ const navItems = [
     { href: '/learn', label: 'Learning', icon: BookOpen },
     { href: '/language-improvement', label: 'Language Coach', icon: Languages },
     { href: '/practice', label: 'Soft Skills', icon: Mic2 },
-    { href: '/personality', label: 'Personality', icon: BrainCircuit },
+    // { href: '/personality', label: 'Personality', icon: BrainCircuit },
     { href: '/profile', label: 'Profile', icon: User },
     { href: '/settings', label: 'Settings', icon: Settings },
 ];

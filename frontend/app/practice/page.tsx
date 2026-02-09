@@ -36,7 +36,7 @@ export default function PracticePage() {
             desc: "The complete pitch training: Record your performance while our AI audits your deck, posture, and tone simultaneously.",
             icon: Mic,
             color: "text-primary",
-            tags: ["Communication", "Deck Audit"]
+            tags: ["Communication", "Deck Audit", "Strategy", "Design"]
         },
         {
             id: 'collaboration',
@@ -54,6 +54,7 @@ export default function PracticePage() {
             color: "text-accent",
             tags: ["Growth", "Self-Awareness"]
         },
+        /*
         {
             id: 'deck',
             title: "Deck Analyst",
@@ -62,6 +63,7 @@ export default function PracticePage() {
             color: "text-primary",
             tags: ["Strategy", "Design"]
         }
+        */
     ];
 
     if (activeSimulator === 'pitch') {
@@ -72,9 +74,11 @@ export default function PracticePage() {
         return <CollaborationSimulator onBack={() => setActiveSimulator(null)} />;
     }
 
+    /*
     if (activeSimulator === 'deck') {
         return <DeckAnalyst onBack={() => setActiveSimulator(null)} />;
     }
+    */
 
     return (
         <div className="space-y-12 max-w-6xl mx-auto">
@@ -499,7 +503,8 @@ function PitchSimulator({ onBack }: { onBack: () => void }) {
                                 {[
                                     { name: 'Posture Expert', icon: Video, status: status === 'recording' ? 'Tracking Geometry' : 'Extracting Trends' },
                                     { name: 'Tone Analyst', icon: Mic, status: status === 'recording' ? 'Analyzing Frequency' : 'Measuring Stress' },
-                                    { name: 'Strategy Coach', icon: BrainCircuit, status: status === 'recording' ? 'Parsing Narrative' : 'Finalizing Audit' }
+                                    { name: 'Strategy Coach', icon: BrainCircuit, status: status === 'recording' ? 'Parsing Narrative' : 'Finalizing Audit' },
+                                    { name: 'Deck Auditor', icon: FileText, status: status === 'recording' ? 'Auditing Slides' : 'Compiling Review' }
                                 ].map((agent, i) => (
                                     <div key={i} className="flex flex-col gap-3 p-4 rounded-2xl bg-white/5 border border-white/5 group hover:bg-white/10 transition-colors">
                                         <div className="flex items-center gap-3">

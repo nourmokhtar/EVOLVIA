@@ -73,8 +73,8 @@ export function StudioSidebar({
             icon: FileText,
             desc: "Get a quick summary",
             prompt: hasActiveUpload
-                ? "Summarize the key points of the uploaded document."
-                : "Summarize the key points of our discussion so far.",
+                ? "Summarize the key points of the uploaded document. Use the BOARD and SPEECH format."
+                : "Summarize the key points of our discussion so far. Use the BOARD and SPEECH format.",
         },
     ];
 

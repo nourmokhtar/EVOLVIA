@@ -348,6 +348,7 @@ Instructions:
    {audio_overview_instructions if audio_overview_instructions else '- **STYLE**: You are a passionate expert. If the user asks a simple question, give a clear answer. If the topic is deep (e.g. Django structure, HBase internals), **IMMERSE YOURSELF**: Provide technical depth, theoretical context, and "why" it matters.'}
    - **DEPTH**: Do not be afraid to be detailed if the topic warrants it. ACT LIKE A HUMAN TEACHER who loves their subject.
    - **STRICT CONTEXT**: Stay within the provided context logic, but explain the *concepts* thoroughly.
+   - **TTS COMPATIBILITY**: NEVER use markdown formatting like bold (**text**) or italics (*text*) in the SPEECH section. No asterisks.
    - **CODE FORMATTING**: USE TRIPLE BACKTICKS (```) FOR ALL COMMANDS AND CODE SNIPPETS.
    - **CRITICAL**: Use triple backticks even for single-line commands.
    - Separate commands onto their own lines.
@@ -424,6 +425,7 @@ REQUIREMENTS:
 8. Indicate the correct answer index (0-3).
 9. Provide a brief explanation for the correct answer.
 10. ESTIMATE the difficulty of each question (1-3).
+11. **TTS COMPATIBILITY**: NEVER use markdown formatting like bold (**text**) or italics (*text*) in the SPEECH section.
 
 OUTPUT FORMAT:
 You must output a list of BOARD actions containing the summary followed by the quiz, then a brief encouraging SPEECH.
@@ -796,7 +798,9 @@ SPEECH: Ready for a challenge? I've created a crossword puzzle with key terms fr
             )
             
             # Call the model
-            sys_content = system_prompt or "You are a patient AI teacher. Detect the language of the user's input and respond in that SAME language (English->English, French->French). Generate responses with exactly two parts: BOARD and SPEECH. Generate BOARD ACTIONS FIRST. Follow the exact format requested."
+            sys_content = system_prompt or "You are a patient AI teacher. Detect the language of the user's input and respond in that SAME language (English->English, French->French). Generate responses with exactly two parts: BOARD and SPEECH. Generate BOARD ACTIONS FIRST. IMPORTANT: In the SPEECH section, NEVER use markdown formatting like bold (**text**) or italics (*text*), as it will be read literally by the text-to-speech system. Use plain text for speech."
+            
+            logger.info(f"--- TOKEN FACTORY CALL START ---\nModel: {model}\nPrompt: {prompt[:500]}...")
             
             response = client.chat.completions.create(
                 model=model,
@@ -808,7 +812,9 @@ SPEECH: Ready for a challenge? I've created a crossword puzzle with key terms fr
                 temperature=0.7,
             )
             
-            return response.choices[0].message.content
+            content = response.choices[0].message.content
+            logger.info(f"--- TOKEN FACTORY CALL SUCCESS ---\nResponse: {content[:500]}...")
+            return content
             
         except ImportError as e:
             logger.warning(f"TokenFactory dependencies not available: {e}. Using mock response.")
@@ -1048,8 +1054,8 @@ JSON:
         speech_text = ""
         board_json = "[]"
 
-        # 1. Extract BOARD block - capturing everything between BOARD: and SPEECH: / end
-        board_match = re.search(r'BOARD:\s*(.*?)(?=\s*SPEECH:|$)', raw_response, re.DOTALL | re.IGNORECASE)
+        # 1. Extract BOARD block - capturing everything between BOARD[:] and SPEECH[:] / end
+        board_match = re.search(r'BOARD:?\s*(.*?)(?=\s*SPEECH:?|$)', raw_response, re.DOTALL | re.IGNORECASE)
         if board_match:
             candidate = board_match.group(1).strip()
             # Clean up potential markdown code blocks
@@ -1071,12 +1077,11 @@ JSON:
                      board_json = f'[{{ "kind": "SHOW_QUIZ", "payload": {raw_quiz} }}]'
 
         # 2. Extract SPEECH block
-        speech_match = re.search(r'SPEECH:\s*((?:.|\n)+)', raw_response, re.DOTALL | re.IGNORECASE)
+        speech_match = re.search(r'SPEECH:?\s*((?:.|\n)+)', raw_response, re.DOTALL | re.IGNORECASE)
         if speech_match:
             speech_text = speech_match.group(1).strip()
-            # Clean up if BOARD follows SPEECH in the text
-            if "BOARD:" in speech_text:
-                speech_text = speech_text.split("BOARD:")[0].strip()
+            # Clean up if BOARD follows SPEECH in the text (flexible split)
+            speech_text = re.split(r'BOARD:?', speech_text, flags=re.IGNORECASE)[0].strip()
         if not speech_text:
             # If no SPEECH tag found, but we have text that isn't JSON, treat it as speech
             # First, strip board_json if it was extracted loosely
@@ -1085,15 +1090,18 @@ JSON:
                 clean_raw = clean_raw.replace(board_json, "")
             
             # Remove any trailing tags
-            clean_raw = re.sub(r'BOARD:\s*', '', clean_raw, flags=re.IGNORECASE)
+            clean_raw = re.sub(r'BOARD:?\s*', '', clean_raw, flags=re.IGNORECASE)
             speech_text = clean_raw.strip()
-            
             if not speech_text and board_json and len(board_json) > 10:
                 # Only fallback to quiz message IF it actually looks like a quiz
                 if '"questions"' in board_json.lower():
                     speech_text = "Here is the quiz you requested. Good luck!"
                 else:
                     speech_text = "I've updated the board with a summary for you."
+
+        # 4. Final speech cleaning for TTS stability
+        # Remove asterisks (**bold**, *italics*) that LLM might have included causing TTS issues
+        speech_text = re.sub(r'\*+', '', speech_text)
 
         # 3. Parse and normalize board actions
         board_actions = []
@@ -1135,6 +1143,10 @@ JSON:
                 # Try to extract kind/action
                 kind_str = action_dict.get("kind") or action_dict.get("action")
                 payload = action_dict.get("payload") or {}
+                
+                # NORMALIZATION: If payload is a string, wrap it in a dict
+                if isinstance(payload, str):
+                    payload = {"text": payload}
 
                 # Fallback: Check if ANY key in the dict is a valid BoardActionKind
                 # This handles { "WRITE_TITLE": "Introduction" }

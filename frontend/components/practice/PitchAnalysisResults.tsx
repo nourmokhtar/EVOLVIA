@@ -35,17 +35,15 @@ export function PitchAnalysisResults({
                 >
                     <Users className="w-4 h-4" /> Delivery Analysis
                 </button>
-                {hasSlides && (
-                    <button
-                        onClick={() => setResultTab('deck')}
-                        className={cn(
-                            "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all duration-300",
-                            resultTab === 'deck' ? "bg-secondary text-white shadow-xl shadow-secondary/20 scale-[1.02]" : "text-muted-foreground hover:text-white"
-                        )}
-                    >
-                        <FileText className="w-4 h-4" /> Deck Audit
-                    </button>
-                )}
+                <button
+                    onClick={() => setResultTab('deck')}
+                    className={cn(
+                        "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all duration-300",
+                        resultTab === 'deck' ? "bg-secondary text-white shadow-xl shadow-secondary/20 scale-[1.02]" : "text-muted-foreground hover:text-white"
+                    )}
+                >
+                    <FileText className="w-4 h-4" /> Deck Audit
+                </button>
             </div>
 
             <div className="relative min-h-[400px]">
@@ -66,7 +64,7 @@ export function PitchAnalysisResults({
                     </div>
                 ) : (
                     <div className="space-y-6 animate-fade-in-up">
-                        {deckAnalysis && (
+                        {deckAnalysis ? (
                             <div className="space-y-6">
                                 <div className="flex items-center justify-between px-2">
                                     <div className="flex items-center gap-3">
@@ -103,6 +101,16 @@ export function PitchAnalysisResults({
                                         details={deckAnalysis.strategy_analysis?.strategic_advice || []}
                                     />
                                 </div>
+                            </div>
+                        ) : (
+                            <div className="glass-card p-12 text-center border-white/5 bg-slate-900/40 flex flex-col items-center justify-center h-full min-h-[300px]">
+                                <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-6 text-muted-foreground">
+                                    <FileText className="w-8 h-8" />
+                                </div>
+                                <h3 className="text-xl font-bold mb-2">No Deck Attached</h3>
+                                <p className="text-muted-foreground text-sm max-w-[200px] mx-auto">
+                                    To receive a multi-agent deck audit, attach a PDF or PPTX before starting your pitch.
+                                </p>
                             </div>
                         )}
                     </div>
