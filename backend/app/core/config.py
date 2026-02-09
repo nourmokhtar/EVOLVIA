@@ -12,8 +12,24 @@ class Settings(BaseSettings):
     # "YOUR_SUPER_SECRET_KEY_CHANGE_ME"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     
-    # Database - SQLite by default (no installation needed)
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./virtual_closet.db")
+    # Database - Supabase PostgreSQL
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/virtual_closet")
+    
+    # Supabase Configuration
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
+    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+    # Postgres environment variables - support multiple common names and sensible defaults
+    # _pg_user = os.getenv("POSTGRES_USER") or os.getenv("POSTGRES_USER")
+    # _pg_password = os.getenv("POSTGRES_PASSWORD") or os.getenv("POSTGRES_PASSWORD")
+    # _pg_host = os.getenv("POSTGRES_HOST") or os.getenv("POSTGRES_SERVER") or "localhost"
+    # _pg_port = os.getenv("POSTGRES_PORT") or os.getenv("POSTGRES_PORT") or "5432"
+    # _pg_db = os.getenv("POSTGRES_DB") or "fastapi_db"
+
+    # POST_DATABASE_URL: str = (
+    #     f"postgresql+psycopg://{_pg_user}:{_pg_password}@{_pg_host}:{_pg_port}/{_pg_db}"
+    # )
+
+    # MongoDB support removed — no Mongo configuration
     # "sqlite:///./virtual_closet.db"
     
     # Gemini API Key

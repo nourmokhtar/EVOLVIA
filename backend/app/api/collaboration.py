@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from sqlalchemy.orm import Session
-from app.db.session import get_db
-from app.models import User
+from app.db.supabase import get_user_by_id
 from app.core.security import get_current_user
 from app.services.ai_service import ai_service
+import logging
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 class SimulationAction(BaseModel):
@@ -17,9 +17,14 @@ class SimulationAction(BaseModel):
 @router.post("/action")
 async def simulate_collaboration(
     action: SimulationAction,
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """Submit a collaboration action in simulation"""
+    # Verify user exists
+    user = await get_user_by_id(current_user.get("id"))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
     # Mock response for collaboration simulation
     return {
         "response": "Teammate: 'I appreciate you understanding my situation. Let's work together to fix this.'",
@@ -31,9 +36,14 @@ async def simulate_collaboration(
 
 @router.get("/history")
 async def get_collaboration_history(
-    current_user: User = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """Get user's collaboration simulation history"""
+    # Verify user exists
+    user = await get_user_by_id(current_user.get("id"))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
     return [
         {"module": "Conflict Resolution", "score": 72, "date": "2026-01-22"}
     ]

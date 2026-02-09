@@ -1,6 +1,4 @@
 from typing import Dict, Any, List, TypedDict
-from app.models import User
-from sqlalchemy.orm import Session
 from app.core.config import settings
 import json
 import logging
@@ -14,9 +12,6 @@ from langchain_openai import ChatOpenAI
 
 
 logger = logging.getLogger(__name__)
-
-
-from app.core.config import settings
 
 
 opik_api_key = settings.opik_api_key
@@ -184,27 +179,36 @@ class PersonalityService:
             "Confidence": 50,
             "Adaptability": 50
         }
-        profile = user.personality_profile or default_profile
+        profile = user.get("personality_profile") or default_profile
         
         return [
             {"subject": k, "A": v, "fullMark": 100} 
             for k, v in profile.items()
         ]
 
-    async def update_score(self, db: Session, user: User, trait: str, delta: int):
+    async def update_score(self, user: dict, trait: str, delta: int) -> dict:
         """
         Updates a specific trait score (e.g., Confidence +5).
         Clamps values between 0 and 100.
         """
-        profile = user.personality_profile or {}
+        from app.db.supabase import update_user
+        from datetime import datetime
+        
+        profile = user.get("personality_profile") or {}
+        # Make mutable copy
+        profile = dict(profile)
+        
         current = profile.get(trait, 50)
         profile[trait] = max(0, min(100, current + delta))
         
-        user.personality_profile = profile
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        return user
+        user_id = user.get("id")
+        update_data = {
+            "personality_profile": profile,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        updated_user = await update_user(user_id, update_data)
+        return updated_user or user
     
     async def analyze_user_input_with_ollama(self, user_prompt: str) -> Dict[str, Any]:
         """
@@ -324,14 +328,15 @@ Be concise and provide only the JSON response.
     
     async def analyze_and_update_personality(          
         self, 
-        db: Session, 
-        user: User, 
+        user: dict, 
         user_prompt: str
     ) -> Dict[str, Any]:
         """
         Complete flow: Analyzes user input with Ollama and updates personality profile.
         Returns updated profile and analysis details.
         """
+        from app.db.supabase import update_user
+        
         # Analyze with Ollama
         analysis_result = await self.analyze_user_input_with_ollama(user_prompt)
         
@@ -340,41 +345,69 @@ Be concise and provide only the JSON response.
         
         # Update personality traits based on analysis
         traits_delta = analysis_result.get("traits_delta", {})
-        profile = user.personality_profile or {trait: 50 for trait in self.PERSONALITY_TRAITS}
+        profile = user.get("personality_profile") or {trait: 50 for trait in self.PERSONALITY_TRAITS}
+        
+        # Create a mutable copy
+        profile = dict(profile)
         
         for trait, delta in traits_delta.items():
             if trait in profile:
                 current = profile[trait]
                 profile[trait] = max(0, min(100, current + delta))
         
-
         try:
-            # CRITICAL FIX: Create a new dict to trigger SQLAlchemy's change detection
-            user.personality_profile = dict(profile)
+            # Update user with new personality profile and timestamp
+            user_id = user.get("id")
+            now = datetime.utcnow().isoformat()
             
-            # Mark the column as modified (important for JSON columns!)
-            from sqlalchemy.orm.attributes import flag_modified
-            flag_modified(user, "personality_profile")
+            # Calculate streak
+            last_active = user.get("last_active")
+            if last_active is None:
+                new_streak = 1
+            else:
+                try:
+                    # Parse ISO format timestamp
+                    from datetime import datetime as dt
+                    last_date = dt.fromisoformat(last_active).date()
+                    today_date = dt.utcnow().date()
+                    delta_days = (today_date - last_date).days
+                    
+                    if delta_days == 0:
+                        new_streak = user.get("streak", 0)
+                    elif delta_days == 1:
+                        new_streak = user.get("streak", 0) + 1
+                    else:
+                        new_streak = 1
+                except Exception as e:
+                    logger.warning(f"Failed to calculate streak: {e}")
+                    new_streak = user.get("streak", 0)
             
-            # Update the timestamp
-            user.updated_at = datetime.utcnow()
-            print(user,file=os.sys.stdout,flush=True)
-            print("Committing changes to database...")
-            db.add(user)
-            db.commit()
-            print("Changes committed to database")
-            db.refresh(user)
-            print("Database refreshed")
+            # Update user in Supabase
+            update_data = {
+                "personality_profile": profile,
+                "updated_at": now,
+                "streak": new_streak,
+                "last_active": now
+            }
+            
+            updated_user = await update_user(user_id, update_data)
+            
         except Exception as e:
-            db.rollback()  # Important: rollback on error
-            print(f"Error updating user: {e}")
-            # Handle the error appropriately
+            logger.error(f"Error updating user: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "user_prompt": user_prompt,
+                "traits_delta": traits_delta,
+                "updated_profile": profile,
+                "analysis": analysis_result.get("analysis", "")
+            }
 
         return {
             "success": True,
             "user_prompt": user_prompt,
             "traits_delta": traits_delta,
-            "updated_profile": user.personality_profile,
+            "updated_profile": profile,
             "analysis": analysis_result.get("analysis", "")
         }
 

@@ -1,31 +1,27 @@
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
-from app.core.config import settings
+"""
+Database session module - provides Supabase client for dependency injection
+"""
 
-# SQLite needs special handling for foreign keys
-connect_args = {"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
+from app.db.supabase import get_supabase
+from supabase import Client
+import logging
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args=connect_args
-)
+logger = logging.getLogger(__name__)
 
-# Enable foreign keys for SQLite
-if settings.DATABASE_URL.startswith("sqlite"):
-    @event.listens_for(engine, "connect")
-    def set_sqlite_pragma(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+def get_db() -> Client:
+    """
+    Dependency function to provide Supabase client to FastAPI routes.
+    
+    Usage:
+        @router.get("/endpoint")
+        async def my_endpoint(db: Client = Depends(get_db)):
+            # db is now the Supabase client
+            data = db.table("users").select("*").execute()
+    """
+    return get_supabase()
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
-# Export engine for table creation
-__all__ = ["engine", "SessionLocal", "get_db"]
+__all__ = ["get_db"]
+
+    

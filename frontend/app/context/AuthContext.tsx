@@ -3,10 +3,11 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 interface AuthContextType {
-  userId: string | null;
+  user: any | null;
   token: string | null;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
+  refreshUser: () => Promise<void>;
   logout: () => void;
   isLoading: boolean;
 }
@@ -14,31 +15,60 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [userId, setUserId] = useState<string | null>(null);
+  const [user, setUser] = useState<any | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
   // Load auth data from localStorage on mount
   useEffect(() => {
-    const storedUserId = localStorage.getItem("userId");
     const storedToken = localStorage.getItem("authToken");
-    
-    if (storedUserId && storedToken) {
-      setUserId(storedUserId);
+
+    if (storedToken) {
       setToken(storedToken);
+      // fetch user profile
+      fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/users/profile`, {
+        headers: {
+          Authorization: `Bearer ${storedToken}`,
+        },
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error('Failed to fetch profile');
+          return res.json();
+        })
+        .then((data) => setUser(data))
+        .catch(() => {
+          // invalid token or error
+          localStorage.removeItem('authToken');
+          setToken(null);
+          setUser(null);
+        })
+        .finally(() => setIsLoading(false));
+    } else {
+      setIsLoading(false);
     }
-    
-    setIsLoading(false);
-//   }, []);
- // Check if user is authenticated and redirect to home page
-    if (userId && token) {
-      router.push("/");
+  }, [router]);
+  const refreshUser = async () => {
+    const storedToken = localStorage.getItem('authToken') || token;
+    if (!storedToken) return;
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/users/profile`, {
+        headers: { Authorization: `Bearer ${storedToken}` },
+      });
+      if (!res.ok) throw new Error('Failed to refresh profile');
+      const data = await res.json();
+      setUser(data);
+      setToken(storedToken);
+    } catch (err) {
+      console.warn('refreshUser failed', err);
+      localStorage.removeItem('authToken');
+      setUser(null);
+      setToken(null);
     }
-  }, [router, userId, token]);
+  };
   const login = async (email: string, password: string) => {
     setIsLoading(true);
     try {
-      const response = await fetch("http://localhost:8000/api/v1/auth/login", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/auth/login`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -57,7 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const newToken = data.access_token;
 
       // Fetch user info to get user ID
-      const userResponse = await fetch("http://localhost:8000/api/v1/users/me", {
+      const userResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/users/profile`, {
         headers: {
           Authorization: `Bearer ${newToken}`,
         },
@@ -68,12 +98,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       const userData = await userResponse.json();
-      const newUserId = userData.id;
-
       // Store in state and localStorage
-      setUserId(newUserId);
+      setUser(userData);
       setToken(newToken);
-      localStorage.setItem("userId", newUserId);
       localStorage.setItem("authToken", newToken);
     } finally {
       setIsLoading(false);
@@ -81,17 +108,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
-    setUserId(null);
+    setUser(null);
     setToken(null);
-    localStorage.removeItem("userId");
     localStorage.removeItem("authToken");
   };
 
   const value: AuthContextType = {
-    userId,
+    user,
     token,
-    isAuthenticated: !!userId && !!token,
+    isAuthenticated: !!user && !!token,
     login,
+    refreshUser,
     logout,
     isLoading,
   };

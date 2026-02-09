@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/app/context/AuthContext';
+import { useRouter } from 'next/navigation';
 import { getPersonalityRadar, analyzeWithOllama } from '@/lib/apiClient';
 
 const defaultPersonalityData = [
@@ -38,7 +39,8 @@ const traits = [
 ];
 
 export default function PersonalityPage() {
-    const { userId, token, isAuthenticated } = useAuth();
+    const { user, token, isAuthenticated, refreshUser, isLoading: authLoading } = useAuth();
+    const router = useRouter();
     const [mounted, setMounted] = useState(false);
     const [personalityData, setPersonalityData] = useState(defaultPersonalityData);
     const [journalEntry, setJournalEntry] = useState('');
@@ -71,20 +73,19 @@ export default function PersonalityPage() {
 
     useEffect(() => {
         // Load initial radar data from backend
-        if (isAuthenticated && userId && token) {
+        if (isAuthenticated && user && token) {
             loadPersonalityData();
         }
-    }, [isAuthenticated, userId, token]);
+    }, [isAuthenticated, user, token]);
 
     const loadPersonalityData = async () => {
         try {
             setIsLoadingRadar(true);
-            if (!userId || !token) {
+            if (!user?.id || !token) {
                 console.warn("Missing userId or token for loading personality data");
                 return;
             }
-            
-            const data = await getPersonalityRadar(userId, token);
+                const data = await getPersonalityRadar(user.id, token);
             console.log("Fetched personality radar data:", data);
             
             if (data && Array.isArray(data)) {
@@ -109,7 +110,7 @@ export default function PersonalityPage() {
             return;
         }
 
-        if (!userId || !token) {
+        if (!user?.id || !token) {
             setFeedback('Authentication required. Please login again.');
             setIsSuccess(false);
             return;
@@ -128,6 +129,12 @@ export default function PersonalityPage() {
                 
                 // Refetch the personality data from backend to ensure accuracy
                 await loadPersonalityData();
+                // refresh user profile (streak and other meta)
+                try {
+                    await refreshUser();
+                } catch (err) {
+                    console.warn('Failed to refresh user after journal submit', err);
+                }
             } else {
                 setFeedback(result.error || 'Failed to analyze journal entry');
                 setIsSuccess(false);
@@ -140,6 +147,19 @@ export default function PersonalityPage() {
             setIsLoading(false);
         }
     };
+
+    // Require authentication for the personality features
+    if (!authLoading && !isAuthenticated) {
+        return (
+            <div className="min-h-[60vh] flex items-center justify-center">
+                <div className="glass-card p-10 text-center">
+                    <h2 className="text-2xl font-bold mb-2">Sign in to view your Personality Profile</h2>
+                    <p className="text-sm text-muted-foreground mb-6">Connect your account to unlock personalized insights and update your streak by journaling.</p>
+                    <button onClick={() => router.push('/login')} className="btn-primary">Connect</button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-12 max-w-7xl mx-auto">

@@ -126,7 +126,7 @@ export default function LoginPage() {
         {/* Footer */}
         <p className="text-center text-muted-foreground text-sm mt-8">
           New here?{" "}
-          <a href="#" className="text-primary hover:underline font-semibold">
+          <a href="/signup" className="text-primary hover:underline font-semibold">
             Create an account
           </a>
         </p>

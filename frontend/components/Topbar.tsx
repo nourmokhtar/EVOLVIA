@@ -1,10 +1,28 @@
 "use client";
 
-import { Bell, Search, Zap } from 'lucide-react';
+import { Bell, Search, Zap, LogOut, LogIn } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ThemeToggle from './ThemeToggle';
+import { useAuth } from '@/app/context/AuthContext';
+import { useRouter } from 'next/navigation';
 
 export default function Topbar() {
+    const { user, logout, isAuthenticated } = useAuth();
+    const router = useRouter();
+
+    const handleLogout = () => {
+        logout();
+        router.push('/login');
+    };
+
+    const handleConnect = () => {
+        router.push('/login');
+    };
+
+    const displayName = user?.full_name || user?.email || 'Guest';
+    const streak = user?.streak ?? 0;
+    const avatar = user?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${displayName}`;
+
     return (
         <header className="h-20 border-b border-border bg-background/50 backdrop-blur-md sticky top-0 z-40 flex items-center justify-between px-8">
             <div className="relative w-96 group">
@@ -19,7 +37,7 @@ export default function Topbar() {
             <div className="flex items-center gap-6">
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary/10 border border-secondary/20">
                     <Zap className="w-4 h-4 text-secondary fill-secondary" />
-                    <span className="text-sm font-bold text-secondary">12 Day Streak</span>
+                    <span className="text-sm font-bold text-secondary">{streak} Day Streak</span>
                 </div>
 
                 <ThemeToggle />
@@ -30,15 +48,26 @@ export default function Topbar() {
                 </button>
 
                 <div className="flex items-center gap-3 pl-4 border-l border-border">
-                    <div className="text-right">
-                        <p className="text-sm font-semibold leading-tight">Alex Rivera</p>
+                    <div className="text-right mr-3">
+                        <p className="text-sm font-semibold leading-tight">{displayName}</p>
                         <p className="text-xs text-muted-foreground lowercase">Pro Learner</p>
                     </div>
                     <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-accent to-secondary p-0.5">
                         <div className="w-full h-full rounded-[10px] bg-surface flex items-center justify-center overflow-hidden">
-                            <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Alex" alt="Avatar" />
+                            <img src={avatar} alt="Avatar" />
                         </div>
                     </div>
+                    {isAuthenticated ? (
+                        <button onClick={handleLogout} className="ml-3 p-2 rounded-lg border border-border bg-surface hover:bg-white/5 flex items-center gap-2">
+                            <LogOut className="w-4 h-4" />
+                            <span className="text-sm">Disconnect</span>
+                        </button>
+                    ) : (
+                        <button onClick={handleConnect} className="ml-3 p-2 rounded-lg border border-border bg-surface hover:bg-white/5 flex items-center gap-2">
+                            <LogIn className="w-4 h-4" />
+                            <span className="text-sm">Connect</span>
+                        </button>
+                    )}
                 </div>
             </div>
         </header>

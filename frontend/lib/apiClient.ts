@@ -11,7 +11,8 @@ export async function apiFetch(
   url: string,
   options: FetchOptions = {}
 ) {
-  const { token, ...fetchOptions } = options;
+  const { token: optToken, ...fetchOptions } = options;
+  const token = optToken ?? (typeof window !== 'undefined' ? localStorage.getItem('authToken') : null);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

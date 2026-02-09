@@ -13,5 +13,9 @@ class User(SQLModel, table=True):
     avatar_url: Optional[str] = None
     personality_profile: Dict = Field(default={}, sa_column=Column(JSON))
     learning_goals: List[str] = Field(default=[], sa_column=Column(JSON))
+    # Streak tracking: number of consecutive days active
+    streak: int = Field(default=0)
+    # Last active timestamp used to compute streaks
+    last_active: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

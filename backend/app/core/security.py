@@ -4,21 +4,17 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer
-from sqlalchemy.orm import Session
 from app.core.config import settings
-from app.db.session import get_db
-
 import os
 from dotenv import load_dotenv
 load_dotenv()
-
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 ALGORITHM = os.getenv("ALGORITHM")
 
-MAX_PASSWORD_LENGTH = os.getenv("MAX_PASSWORD_LENGTH")
+MAX_PASSWORD_LENGTH = int(os.getenv("MAX_PASSWORD_LENGTH"))
 
 def create_access_token(
     subject: Union[str, Any], expires_delta: timedelta = None
@@ -63,10 +59,10 @@ def get_password_hash(password: str) -> str:
 
 def get_current_user(
     credentials = Depends(security),
-    db: Session = Depends(get_db)
 ):
     """Get the current authenticated user from JWT token"""
-    from app.models import User
+    import asyncio
+    from app.db.supabase import get_user_by_id
     
     token = credentials.credentials
     try:
@@ -85,7 +81,8 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    user = db.query(User).filter(User.id == user_id).first()
+    # Fetch user from Supabase
+    user = asyncio.run(get_user_by_id(user_id))
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
