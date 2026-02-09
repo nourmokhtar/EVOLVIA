@@ -54,6 +54,3 @@ app.include_router(puzzle.router, prefix=f"{settings.API_V1_STR}/puzzle", tags=[
 @app.get("/")
 def root():
     return {"message": "Welcome to Evolvia API"}
-
-
-
