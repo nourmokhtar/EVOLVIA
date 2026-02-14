@@ -1,7 +1,8 @@
 from typing import Dict, Any, List, TypedDict
-from app.models import User
-from sqlalchemy.orm import Session
 from app.core.config import settings
+# from app.models import User
+from app.db.supabase import *
+from sqlalchemy.orm import Session
 import json
 import logging
 import os
@@ -16,19 +17,13 @@ from langchain_openai import ChatOpenAI
 logger = logging.getLogger(__name__)
 
 
-from app.core.config import settings
-
-
-opik_api_key = settings.opik_api_key
-
-opik_project_name = settings.opik_project_name
-
-opik_workspace = settings.opik_workspace
+# Opik configuration
+opik_api_key = getattr(settings, 'OPIK_API_KEY', None)
+opik_project_name = getattr(settings, 'OPIK_PROJECT_NAME', 'evolvia')
+opik_workspace = getattr(settings, 'OPIK_WORKSPACE', None)
 
 if opik_api_key:
-    configure(api_key=opik_api_key ,workspace=opik_workspace
-            #   project_name=opik_project_name
-            )
+    configure(api_key=opik_api_key, workspace=opik_workspace)
     logger.info(f"Opik configured with project: {opik_project_name}")
 else:
     logger.warning("OPIK_API_KEY not set. Opik tracing will be disabled.")
@@ -40,6 +35,9 @@ class PersonalityState(TypedDict):
     traits_delta: Dict[str, int]
     model_used: str
     error: str
+
+
+
 
 class PersonalityService:
     """
@@ -58,9 +56,9 @@ class PersonalityService:
     ]
     
     def __init__(self):
-        self.ollama_base_url = settings.OLLAMA_BASE_URL
-        self.ollama_model = settings.OLLAMA_MODEL
-        self.use_ollama = settings.USE_OLLAMA_FOR_PERSONALITY
+        self.ollama_base_url = getattr(settings, 'OLLAMA_BASE_URL', 'http://localhost:11434')
+        self.ollama_model = getattr(settings, 'OLLAMA_MODEL', 'llama3.2')
+        self.use_ollama = getattr(settings, 'USE_OLLAMA_FOR_PERSONALITY', True)
 
         self.use_esprit = getattr(settings, 'USE_ESPRIT_FOR_PERSONALITY', False)
         self.esprit_api_key = getattr(settings, 'ESPRIT_API_KEY', None)
@@ -68,9 +66,10 @@ class PersonalityService:
         self.esprit_model = getattr(settings, 'ESPRIT_MODEL', 'gpt-4')
         
 
-
         self.llm = None
         self.graph = None
+        self.supabase = get_supabase()
+
         
         if self.use_esprit and self.esprit_api_key and self.esprit_base_url:
             try:
@@ -100,6 +99,7 @@ class PersonalityService:
                     timeout=180 
                 )
                 self.graph = self._build_personality_graph()
+                logger.info(f"Ollama initialized with model: {self.ollama_model}")
             except Exception as e:
                 logger.warning(f"Failed to initialize Ollama LLM: {e}")
     
@@ -130,7 +130,7 @@ class PersonalityService:
             state["error"] = "Prompt cannot be empty"
         return state
     
-    @track(project_name=opik_project_name)
+    @track(project_name=opik_project_name if opik_api_key else None)
     def _analyze_traits_node(self, state: PersonalityState) -> PersonalityState:
         """Analyze personality traits using Ollama with Opik tracking"""
         if state.get("error"):
@@ -141,7 +141,7 @@ class PersonalityService:
             
             if self.llm:
                 analysis_text = self.llm.invoke(analysis_prompt)
-                print(f"Ollama raw response: {analysis_text}",file=os.sys.stdout,flush=True)
+                print(f"Ollama raw response: {analysis_text}", file=os.sys.stdout, flush=True)
                 if hasattr(analysis_text, "content"):
                     analysis_text = analysis_text.content
                 else:
@@ -191,21 +191,44 @@ class PersonalityService:
             for k, v in profile.items()
         ]
 
-    async def update_score(self, db: Session, user: User, trait: str, delta: int):
-        """
-        Updates a specific trait score (e.g., Confidence +5).
+    async def update_score(self, user: dict, trait: str, delta: int) -> dict:
+        """Updates a specific trait score (e.g., Confidence +5).
         Clamps values between 0 and 100.
         """
-        profile = user.personality_profile or {}
+        profile = user.get("personality_profile") or {}
+        # Make mutable copy
+        profile = dict(profile)
+        
         current = profile.get(trait, 50)
         profile[trait] = max(0, min(100, current + delta))
         
-        user.personality_profile = profile
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        return user
+        user_id = user.get("id")
+        update_data = {
+            "personality_profile": profile,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        updated_user = await update_user(user_id, update_data)
+        return updated_user or user
+    # async def update_score(self, db: Session, user: User, trait: str, delta: int) -> User:
+    #     """
+    #     Updates a specific trait score (e.g., Confidence +5).
+    #     Clamps values between 0 and 100.
+    #     """
+    #     profile = user.personality_profile or {}
+    #     # Make mutable copy
+    #     profile = dict(profile)
+        
+    #     current = profile.get(trait, 50)
+    #     profile[trait] = max(0, min(100, current + delta))
+        
+    #     user.personality_profile = profile
+    #     db.add(user)
+    #     db.commit()
+    #     db.refresh(user)
+    #     return user
     
+
     async def analyze_user_input_with_ollama(self, user_prompt: str) -> Dict[str, Any]:
         """
         Uses LangGraph + Opik to analyze user prompt and estimate personality trait changes.
@@ -226,7 +249,7 @@ class PersonalityService:
         
         try:
             # Initialize state for LangGraph
-            initial_state: PersonalityState = {
+            initial_state:PersonalityState = {
                 "user_prompt": user_prompt,
                 "analysis_text": "",
                 "traits_delta": {},
@@ -244,6 +267,14 @@ class PersonalityService:
                     "error": result_state["error"],
                     "traits_delta": result_state.get("traits_delta", {})
                 }
+            
+            # Update user in Supabase
+            user_id = self.supabase.auth.current_user().get("id")
+            update_data = {
+                "personality_profile": result_state.get("traits_delta", {}),
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            updated_user = await self.supabase.table("users").update(update_data).eq("id", user_id).single()
             
             return {
                 "success": True,
@@ -300,9 +331,6 @@ Be concise and provide only the JSON response.
             import re
             print(f"Response text for parsing: {response_text}")
             
-          
-
-            print(f"Response text for parsing: {response_text}")
 
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             
@@ -324,13 +352,13 @@ Be concise and provide only the JSON response.
     
     async def analyze_and_update_personality(          
         self, 
-        db: Session, 
-        user: User, 
+        user: dict, 
         user_prompt: str
     ) -> Dict[str, Any]:
         """
         Complete flow: Analyzes user input with Ollama and updates personality profile.
         Returns updated profile and analysis details.
+        Adapted to use Supabase instead of SQLAlchemy.
         """
         # Analyze with Ollama
         analysis_result = await self.analyze_user_input_with_ollama(user_prompt)
@@ -340,41 +368,62 @@ Be concise and provide only the JSON response.
         
         # Update personality traits based on analysis
         traits_delta = analysis_result.get("traits_delta", {})
-        profile = user.personality_profile or {trait: 50 for trait in self.PERSONALITY_TRAITS}
+        profile = user.get("personality_profile") or {trait: 50 for trait in self.PERSONALITY_TRAITS}
+        
+        # Create a mutable copy
+        profile = dict(profile)
         
         for trait, delta in traits_delta.items():
             if trait in profile:
                 current = profile[trait]
                 profile[trait] = max(0, min(100, current + delta))
         
-
         try:
-            # CRITICAL FIX: Create a new dict to trigger SQLAlchemy's change detection
-            user.personality_profile = dict(profile)
+            # Calculate streak
+            last_active = user.get("last_active")
+            if last_active is None:
+                new_streak = 1
+            else:
+                try:
+                    last_date = datetime.fromisoformat(last_active).date()
+                    today_date = datetime.utcnow().date()
+                    delta_days = (today_date - last_date).days
+                    
+                    if delta_days == 0:
+                        new_streak = user.get("streak", 0)
+                    elif delta_days == 1:
+                        new_streak = (user.get("streak", 0) + 1)
+                    else:
+                        new_streak = 1
+                except Exception as e:
+                    logger.warning(f"Failed to calculate streak: {e}")
+                    new_streak = user.get("streak", 0)
             
-            # Mark the column as modified (important for JSON columns!)
-            from sqlalchemy.orm.attributes import flag_modified
-            flag_modified(user, "personality_profile")
-            
-            # Update the timestamp
-            user.updated_at = datetime.utcnow()
-            print(user,file=os.sys.stdout,flush=True)
-            print("Committing changes to database...")
-            db.add(user)
-            db.commit()
-            print("Changes committed to database")
-            db.refresh(user)
-            print("Database refreshed")
+            # Update user with new personality profile
+            data = {
+                "personality_profile": profile,
+                "streak": new_streak,
+                "last_active": datetime.utcnow().isoformat()
+            }
+            response = await update_user(user_id=user["id"], data=data)
+            if not response.get("success", False):
+                return response 
         except Exception as e:
-            db.rollback()  # Important: rollback on error
-            print(f"Error updating user: {e}")
-            # Handle the error appropriately
+            logger.error(f"Error updating user: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "user_prompt": user_prompt,
+                "traits_delta": traits_delta,
+                "updated_profile": profile,
+                "analysis": analysis_result.get("analysis", "")
+            }
 
         return {
             "success": True,
             "user_prompt": user_prompt,
             "traits_delta": traits_delta,
-            "updated_profile": user.personality_profile,
+            "updated_profile": profile,
             "analysis": analysis_result.get("analysis", "")
         }
 

@@ -1,6 +1,6 @@
 // API Configuration
-export const API_URL = 'http://localhost:8000';
-// process.env.NEXT_PUBLIC_API_URL ||
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 // Evolvia API Endpoints
 export const API = {
   // Authentication
@@ -38,12 +38,14 @@ export const API = {
   pitch: {
     analyze: `${API_URL}/api/v1/pitch/analyze`,
     history: `${API_URL}/api/v1/pitch/history`,
+    deckAnalyze: `${API_URL}/api/v1/pitch/deck/analyze`,
+    deckExtract: `${API_URL}/api/v1/pitch/deck/extract`,
   },
 
   // Collaboration
   collaboration: {
-    action: `${API_URL}/api/v1/collaboration/action`,
-    history: `${API_URL}/api/v1/collaboration/history`,
+    start: `${API_URL}/api/v1/collaboration/start`,
+    turn: `${API_URL}/api/v1/collaboration/turn`,
   },
 
   // Personality
@@ -59,4 +61,19 @@ export const API = {
     analyze: `${API_URL}/api/v1/puzzle/analyze`,
     reassess: `${API_URL}/api/v1/puzzle/reassess`,
   },
+
+  // Language Improvement
+  languageImprovement: {
+    analyze: `${API_URL}/api/v1/language-improvement/analyze`,
+  },
+
+  // Videos
+  videos: {
+    upload: `${API_URL}/api/v1/videos/upload`,
+    list: `${API_URL}/api/v1/videos/list`,
+    url: (fileName: string) => `${API_URL}/api/v1/videos/url/${fileName}`,
+    delete: (fileName: string) => `${API_URL}/api/v1/videos/delete/${fileName}`,
+    download: (fileName: string) => `${API_URL}/api/v1/videos/download/${fileName}`,
+  },
 };
+

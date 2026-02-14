@@ -1,0 +1,139 @@
+from langchain_groq import ChatGroq
+from app.core.config import settings
+from langchain_core.messages import HumanMessage, SystemMessage
+import os
+from langchain_core.prompts import ChatPromptTemplate
+from ..pitch_graph_state import PitchAnalysisState
+import json
+try:
+    from opik import track
+except ImportError:
+    def track(func): return func
+
+from ..utils.json_utils import parse_json_robustly
+
+@track
+async def aggregator_node(state: PitchAnalysisState):
+    """
+    Lead Executive Coach Agent - Final Synthesis.
+    """
+    print("--- HEAD COACH: THE FINAL VERDICT ---")
+    try:
+        posture = state.get("posture_analysis", {})
+        tone = state.get("tone_analysis", {})
+        stress = state.get("stress_analysis", {})
+        transcript = state.get("transcript", "")
+        
+        # Determine which LLM to use
+        if settings.GROQ_API_KEY and settings.GROQ_API_KEY != "your_key_here":
+            llm = ChatGroq(
+                model="llama-3.1-8b-instant",
+                temperature=0.1,
+                groq_api_key=settings.GROQ_API_KEY,
+                model_kwargs={"response_format": {"type": "json_object"}}
+            )
+            
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", aggregator_system_prompt),
+                ("user", "Transcript: {transcript}\nPosture: {posture}\nTone: {tone}\nStress: {stress}")
+            ])
+            
+            chain = prompt | llm
+            response = await chain.ainvoke({
+                "transcript": transcript,
+                "posture": json.dumps(posture),
+                "tone": json.dumps(tone),
+                "stress": json.dumps(stress)
+            })
+            content = response.content.strip()
+        else:
+            print("--- USING TOKEN FACTORY FALLBACK FOR AGGREGATOR ---")
+            from openai import OpenAI
+            import httpx
+            
+            client = OpenAI(
+                api_key=settings.TOKEN_FACTORY_KEY,
+                base_url=settings.TOKEN_FACTORY_URL,
+                http_client=httpx.Client(verify=False)
+            )
+            
+            messages = [
+                {"role": "system", "content": aggregator_system_prompt + "\nIMPORTANT: Return ONLY valid JSON."},
+                {"role": "user", "content": f"Transcript: {transcript}\nPosture: {json.dumps(posture)}\nTone: {json.dumps(tone)}\nStress: {json.dumps(stress)}"}
+            ]
+            
+            response = client.chat.completions.create(
+                model=settings.TOKEN_FACTORY_MODEL,
+                messages=messages,
+                temperature=0.1,
+            )
+            content = response.choices[0].message.content.strip()
+        
+        # Robust JSON extraction
+        final_data = parse_json_robustly(content)
+        
+        if not final_data:
+            print(f"--- FAILED TO PARSE AGGREGATOR RESULT. CONTENT: {content[:200]}... ---")
+            final_data = {
+                "overall_score": 75,
+                "summary": "Great session! You've successfully completed the pitch simulator. Review the specific metrics for more detail.",
+                "recommendations": ["Keep practicing your delivery", "Watch your posture trends"],
+                "competency_map": {"Authority": 70, "Empathy": 70, "Resilience": 70, "Persuasion": 70}
+            }
+
+        print(f"AGGREGATOR RESULT: {json.dumps(final_data, indent=2)}")
+        
+        # Format recommendations safely
+        raw_recs = final_data.get("recommendations", ["Focus on clarity", "Relax your posture"])
+        clean_recs = [str(r.get("feedback", r)) if isinstance(r, dict) else str(r) for r in raw_recs]
+
+        # Normalize competency_map keys for the frontend
+        raw_map = final_data.get("competency_map", {})
+        norm_map = {
+            "Authority": raw_map.get("Authority", raw_map.get("authority", 70)),
+            "Empathy": raw_map.get("Empathy", raw_map.get("empathy", 70)),
+            "Resilience": raw_map.get("Resilience", raw_map.get("resilience", 70)),
+            "Persuasion": raw_map.get("Persuasion", raw_map.get("persuasion", 70))
+        }
+
+        return {
+            "overall_score": int(final_data.get("overall_score", 70)),
+            "feedback_summary": str(final_data.get("summary", "Session recorded.")),
+            "recommendations": clean_recs,
+            "competency_map": norm_map
+        }
+    except Exception as e:
+        print(f"!!! AGGREGATOR FAILED: {str(e)} !!!")
+        return {
+            "overall_score": 0,
+            "feedback_summary": f"Analysis currently unavailable. Error: {str(e)}",
+            "recommendations": ["Check API configuration", "Restart backend server"],
+            "competency_map": {"Authority": 0, "Empathy": 0, "Resilience": 0, "Persuasion": 0}
+        }
+
+aggregator_system_prompt = """You are the Lead Executive Coach. 
+Synthesize the data into a high-impact growth plan.
+
+INPUT DATA to consider:
+- Posture: Look at 'head_lift_score', 'hands_visible', and the 'trends' field (which describes how body language evolved).
+- Tone: Look at 'wpm', 'silence_ratio', and 'pitch_variance'.
+- Stress: Look at 'stress_score' and 'nervous_habits'.
+
+Generate a Summary that specifically references these details and the PROGRESSION of the performance (e.g. 'You started strong but your energy dipped towards the end, as seen in your decreasing head lift score and slower pace').
+
+Respond ONLY in a single valid JSON object. 
+IMPORTANT: Do not use unescaped double quotes inside strings. Use single quotes if necessary.
+
+JSON Structure:
+{{
+    "overall_score": int,
+    "summary": "vision-driven summary",
+    "recommendations": ["Strategy 1", "Strategy 2", "Strategy 3"],
+    "competency_map": {{
+        "Authority": int,
+        "Empathy": int,
+        "Resilience": int,
+        "Persuasion": int
+    }}
+}}
+"""

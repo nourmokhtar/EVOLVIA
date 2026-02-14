@@ -11,16 +11,18 @@ import {
     Settings,
     ChevronLeft,
     ChevronRight,
-    Sparkles
+    Sparkles,
+    Languages
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
-    { href: '/home', label: 'Dashboard', icon: LayoutDashboard },
+    { href: '/', label: 'Dashboard', icon: LayoutDashboard },
     { href: '/learn', label: 'Learning', icon: BookOpen },
+    { href: '/language-improvement', label: 'Language Coach', icon: Languages },
     { href: '/practice', label: 'Soft Skills', icon: Mic2 },
-    { href: '/personality', label: 'Personality', icon: BrainCircuit },
+    // { href: '/personality', label: 'Personality', icon: BrainCircuit },
     { href: '/profile', label: 'Profile', icon: User },
     { href: '/settings', label: 'Settings', icon: Settings },
 ];
@@ -28,19 +30,27 @@ const navItems = [
 export default function Sidebar() {
     const pathname = usePathname();
     const [collapsed, setCollapsed] = useState(false);
+    const [isMounted, setIsMounted] = useState(false);
+
+    useEffect(() => {
+        setIsMounted(true);
+    }, []);
+
+    // During SSR/hydration, always render as expanded to avoid mismatch
+    const displayCollapsed = isMounted ? collapsed : false;
 
     return (
         <aside
             className={cn(
                 "fixed left-0 top-0 h-screen bg-surface border-r border-border transition-all duration-300 z-50 flex flex-col",
-                collapsed ? "w-20" : "w-64"
+                displayCollapsed ? "w-20" : "w-64"
             )}
         >
             <div className="p-6 flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center flex-shrink-0">
                     <Sparkles className="w-5 h-5 text-white" />
                 </div>
-                {!collapsed && (
+                {!displayCollapsed && (
                     <span className="font-heading font-bold text-xl tracking-tight text-gradient">
                         Evolvia
                     </span>
@@ -64,10 +74,10 @@ export default function Sidebar() {
                             )}
                         >
                             <Icon className={cn("w-5 h-5", isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground")} />
-                            {!collapsed && (
+                            {!displayCollapsed && (
                                 <span className="font-medium">{item.label}</span>
                             )}
-                            {isActive && !collapsed && (
+                            {isActive && !displayCollapsed && (
                                 <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary" />
                             )}
                         </Link>
@@ -79,8 +89,9 @@ export default function Sidebar() {
                 <button
                     onClick={() => setCollapsed(!collapsed)}
                     className="w-full flex items-center justify-center p-2 rounded-lg hover:bg-white/5 transition-colors text-muted-foreground"
+                    suppressHydrationWarning
                 >
-                    {collapsed ? <ChevronRight className="w-5 h-5" /> : (
+                    {displayCollapsed ? <ChevronRight className="w-5 h-5" /> : (
                         <div className="flex items-center gap-2 w-full px-2">
                             <ChevronLeft className="w-5 h-5" />
                             <span className="text-sm font-medium">Collapse</span>

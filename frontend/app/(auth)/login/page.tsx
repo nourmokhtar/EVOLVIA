@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/context/AuthContext";
 import { LogIn, AlertCircle, Loader, ArrowRight } from "lucide-react";
@@ -12,9 +12,17 @@ export default function LoginPage() {
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
     const [isLoading, setIsLoading] = useState(false);
-    const { login } = useAuth();
+    const { login ,token, isAuthenticated, userId  } = useAuth();
     const router = useRouter();
 
+    useEffect(() => {
+    console.log("🎯 Dashboard - Auth state:", { 
+        isAuthenticated, 
+        hasToken: !!token, 
+        userId,
+        tokenPreview: token?.slice(0, 20) + "..." 
+    });
+    }, [isAuthenticated, token, userId]);
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError("");
@@ -23,12 +31,12 @@ export default function LoginPage() {
         try {
             console.log("Sign In clicked, initiating non-blocking login and redirect...");
             // Non-blocking call to login
-            login(email, password).catch(e => console.error("Background login error:", e));
+            await login(email, password).catch(e => console.error("Background login error:", e));
 
             // Instant redirect
-            window.location.href = "/home";
+            window.location.href = "/";
         } catch (err) {
-            window.location.href = "/home";
+            window.location.href = "/";
         } finally {
             setIsLoading(false);
         }

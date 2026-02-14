@@ -1,0 +1,18 @@
+{
+  "id": "scenario_004",
+  "title": "Project scope creep",
+  "npc_name": "Mike",
+  "role": "client",
+  "initial_npc_message": "This looks great so far, but I was thinking we could add a few more features. It wouldn't take much extra time, right?",
+  "context": "You are a project manager; Mike is a client who keeps expanding project requirements.",
+  "objectives": [
+    "Politely address scope concerns",
+    "Explain impact on timeline and budget",
+    "Propose prioritization or phased approach"
+  ],
+  "max_turns": 10,
+  "characters": [{"name": "Mike", "role": "client"}],
+  "hidden_constraints": ["Fixed budget and timeline", "Client expectations management"],
+  "success_criteria": ["Scope concerns addressed", "Impact explained clearly", "Alternative proposed"],
+  "resolution_conditions": ["Manager sets boundaries", "Client understands constraints", "Agreement on scope reached"]
+}

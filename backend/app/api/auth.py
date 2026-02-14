@@ -1,90 +1,108 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
 from datetime import timedelta
-from app.db.session import get_db
 from app.core import security
 from app.core.config import settings
-from app.models import User
 from app.schemas.user import UserCreate, UserOut, Token
-from pydantic import BaseModel
+from app.db.supabase import get_supabase, get_user_by_email, create_user
+import logging
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
 @router.post("/signup", response_model=UserOut)
-def signup(user_in: UserCreate, db: Session = Depends(get_db)):
-    """Register a new user"""
-    import logging
-    logger = logging.getLogger(__name__)
+async def signup(user_in: UserCreate):
+    """
+    Register a new user.
     
-    logger.info(f"Signup attempt for email: {user_in.email}")
+    Args:
+        user_in: User registration data (email, password, full_name)
     
-    user = db.query(User).filter(User.email == user_in.email).first()
-    if user:
-        logger.warning(f"User already exists for email: {user_in.email}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The user with this email already exists in the system",
+    Returns:
+        Created user object
+    """
+    try:
+        # Check if user already exists
+        existing_user = await get_user_by_email(user_in.email)
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A user with this email already exists in the system",
+            )
+        
+        # Hash password
+        hashed_password = security.get_password_hash(user_in.password)
+        
+        # Create new user in database
+        new_user = await create_user({
+            "email": user_in.email,
+            "hashed_password": hashed_password,
+            "full_name": user_in.full_name,
+        })
+        
+        if not new_user:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create user",
+            )
+        
+        logger.info(f"✅ User registered successfully: {user_in.email}")
+        
+        return UserOut(
+            id=str(new_user.get("id")),
+            email=new_user.get("email"),
+            full_name=new_user.get("full_name"),
         )
-    
-    db_user = User(
-        email=user_in.email,
-        hashed_password=security.get_password_hash(user_in.password),
-        full_name=user_in.full_name,
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    
-    logger.info(f"User created successfully for email: {user_in.email}, ID: {db_user.id}")
-    return db_user
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Signup error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred during registration",
+        )
 
 @router.post("/login", response_model=Token)
-def login(
-    credentials: LoginRequest,
-    db: Session = Depends(get_db)
-):
-    """Login with email and password"""
-    import logging
-    logger = logging.getLogger(__name__)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    Login user and return JWT access token.
     
-    logger.info(f"Login attempt for email: {credentials.email}")
+    Args:
+        form_data: OAuth2 form data (username=email, password)
     
-    user = db.query(User).filter(User.email == credentials.email).first()
-    if not user:
-        logger.warning(f"User not found for email: {credentials.email}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
+    Returns:
+        Token object with access_token and token_type
+    """
+    try:
+        # Fetch user by email (username field contains email)
+        user = await get_user_by_email(form_data.username)
+        
+        # Validate user exists and password is correct
+        if not user or not security.verify_password(form_data.password, user.get("hashed_password", "")):
+            logger.warning(f"⚠️ Failed login attempt for email: {form_data.username}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+            )
+        
+        # Create access token
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = security.create_access_token(
+            subject=str(user.get("id")), 
+            expires_delta=access_token_expires
         )
-    
-    if not security.verify_password(credentials.password, user.hashed_password):
-        logger.warning(f"Invalid password for email: {credentials.email}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
+        
+        logger.info(f"✅ User logged in successfully: {form_data.username}")
+        
+        return Token(
+            access_token=access_token,
+            token_type="bearer",
         )
-    
-    logger.info(f"Successful login for email: {credentials.email}")
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return {
-        "access_token": security.create_access_token(
-            user.id, expires_delta=access_token_expires
-        ),
-        "token_type": "bearer",
-    }
-
-@router.get("/debug/users")
-def debug_list_users(db: Session = Depends(get_db)):
-    """Debug endpoint to list all users (remove in production)"""
-    users = db.query(User).all()
-    return {
-        "count": len(users),
-        "users": users
-    }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Login error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred during login",
+        )

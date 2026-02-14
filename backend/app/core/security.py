@@ -1,24 +1,16 @@
 from datetime import datetime, timedelta
-from typing import Any, Union
+from typing import Any, Union, Optional, Dict
 from jose import jwt, JWTError
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer
-from sqlalchemy.orm import Session
+from fastapi import HTTPException, status, Depends, Request
 from app.core.config import settings
-from app.db.session import get_db
+import logging
 
-import os
-from dotenv import load_dotenv
-load_dotenv()
-
+logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
 
-ALGORITHM = os.getenv("ALGORITHM")
-
-MAX_PASSWORD_LENGTH = os.getenv("MAX_PASSWORD_LENGTH")
+ALGORITHM = "HS256"
 
 def create_access_token(
     subject: Union[str, Any], expires_delta: timedelta = None
@@ -33,83 +25,115 @@ def create_access_token(
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-def _truncate_password(password: str, max_bytes: int = MAX_PASSWORD_LENGTH) -> str:
-    """
-    Truncate password to max_bytes in UTF-8 encoding.
-    Handles multi-byte UTF-8 characters safely.
-    """
-    encoded = password.encode('utf-8')[:max_bytes]
-    
-    # Handle incomplete multi-byte UTF-8 sequences
-    while encoded:
-        try:
-            return encoded.decode('utf-8')
-        except UnicodeDecodeError:
-            # Remove last byte if it forms an incomplete sequence
-            encoded = encoded[:-1]
-    
-    return ""
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    # Truncate password to MAX_PASSWORD_LENGTH bytes in UTF-8 encoding before verification
-    truncated_password = _truncate_password(plain_password)
-    return pwd_context.verify(truncated_password, hashed_password)
+    return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password: str) -> str:
-    # Truncate password to MAX_PASSWORD_LENGTH bytes in UTF-8 encoding before hashing
-    # This is necessary because bcrypt has a 72-byte limit
-    truncated_password = _truncate_password(password)
-    return pwd_context.hash(truncated_password)
-
-def get_current_user(
-    credentials = Depends(security),
-    db: Session = Depends(get_db)
-):
-    """Get the current authenticated user from JWT token"""
-    from app.models import User
-    
-    token = credentials.credentials
+    return pwd_context.hash(password)
+def decode_token(token: str) -> Optional[Dict[str, Any]]:
+    """Decode JWT token and return payload"""
     try:
+        if not token:
+            logger.error("Token is empty or None")
+            return None
+            
+        token = token.strip()
+        
+        # Remove "Bearer " prefix if present
+        if token.startswith("Bearer "):
+            token = token[7:]
+        
+        # Check segments
+        segments = token.split('.')
+        if len(segments) != 3:
+            logger.error(f"Invalid JWT format: expected 3 segments, got {len(segments)}")
+            return None
+        
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate credentials",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-    except JWTError:
+        logger.info(f"✅ Token successfully decoded for user: {payload.get('sub')}")
+        return payload
+        
+    except jwt.ExpiredSignatureError:
+        logger.error("❌ Token has expired")
+        return None
+    except jwt.InvalidTokenError as e:
+        logger.error(f"❌ Invalid token: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Token decode error: {e}")
+        return None
+# def decode_token(token: str) -> Optional[Dict[str, Any]]:
+#     """Decode JWT token and return payload"""
+#     try:
+#         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+#         return payload
+#     except JWTError as e:
+#         logger.error(f"Token decode error: {e}")
+#         return None
+async def get_current_user(request: Request) -> Dict[str, Any]:
+    """
+    Extract and validate the current user from JWT token in Authorization header.
+    """
+    # Extract token from Authorization header
+    auth_header = request.headers.get("Authorization")
+    
+    if not auth_header:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
+            detail="Missing authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
+    # Parse "Bearer <token>"
+    try:
+        parts = auth_header.strip().split()
+        
+        if len(parts) != 2:
+            logger.error(f"❌ Expected 2 parts (Bearer + token), got {len(parts)}")
+            raise ValueError(f"Expected 2 parts, got {len(parts)}")
+        
+        scheme, token = parts
+        
+        if scheme.lower() != "bearer":
+            raise ValueError("Invalid scheme")
+            
+    except (ValueError, IndexError) as e:
+        logger.error(f"❌ Header parsing error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authorization header format: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Decode token
+    payload = decode_token(token)
+    
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token claims",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Fetch user from database
+    from app.db.supabase import get_user_by_id
+    
+    user = await get_user_by_id(user_id)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    return user
-
-def get_current_user_optional(
-    credentials = Depends(security),
-    db: Session = Depends(get_db)
-):
-    """Get the current authenticated user from JWT token, or None if not authenticated"""
-    from app.models import User
-    
-    try:
-        token = credentials.credentials
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            return None
-    except (JWTError, AttributeError):
-        return None
-    
-    user = db.query(User).filter(User.id == user_id).first()
+    user["id"] = user_id
+    logger.info(f"✅ User authenticated: {user_id}")
     return user

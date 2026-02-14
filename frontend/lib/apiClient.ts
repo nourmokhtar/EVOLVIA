@@ -34,34 +34,16 @@ export async function apiFetch(
   return response.json();
 }
 
-/**
- * Get personality radar data for a user
- */
-export async function getPersonalityRadar(userId: string, token: string) {
-  return apiFetch(`${API.personality.radar}?user_id=${userId}`, {
-    token,
-  });
-}
+// ============================================
+// USER ENDPOINTS
+// ============================================
 
 /**
- * Get personality insights for a user
+ * Get current user profile
  */
-export async function getPersonalityInsights(userId: string, token: string) {
-  return apiFetch(`${API.personality.insights}?user_id=${userId}`, {
+export async function getMeUser(token: string) {
+  return apiFetch(API.users.me, {
     token,
-  });
-}
-
-/**
- * Analyze text with Ollama for personality insights
- */
-export async function analyzeWithOllama(text: string, token: string) {
-  return apiFetch(API.personality.analyzeWithOllama, {
-    token,
-    method: 'POST',
-    body: JSON.stringify({
-      prompt: text,
-    }),
   });
 }
 
@@ -75,13 +57,30 @@ export async function getUserProfile(token: string) {
 }
 
 /**
- * Get user level/progress updates
+ * Upload user avatar
  */
-export async function getUserProgress(userId: string, token: string) {
-  return apiFetch(`${API_URL}/api/v1/users/${userId}/progress`, {
-    token,
+export async function uploadAvatar(file: File, token: string) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(API.users.avatar, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
   });
+
+  if (!response.ok) {
+    throw new Error(`API Error: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
 }
+
+// ============================================
+// LESSONS & QUIZZES
+// ============================================
 
 /**
  * Get lessons list
@@ -119,6 +118,82 @@ export async function getQuizQuestions(quizId: string, token: string) {
   });
 }
 
+// ============================================
+// PERSONALITY ENDPOINTS
+// ============================================
+
+/**
+ * Get personality radar data for a user
+ */
+export async function getPersonalityRadar(userId: string, token: string) {
+  return apiFetch(`${API.personality.radar}?user_id=${userId}`, {
+    token,
+  });
+}
+
+/**
+ * Get personality insights for a user
+ */
+export async function getPersonalityInsights(userId: string, token: string) {
+  return apiFetch(`${API.personality.insights}?user_id=${userId}`, {
+    token,
+  });
+}
+
+/**
+ * Analyze text with Ollama for personality insights
+ */
+export async function analyzeWithOllama(text: string, token: string) {
+  return apiFetch(API.personality.analyzeWithOllama, {
+    token,
+    method: 'POST',
+    body: JSON.stringify({
+      prompt: text,
+    }),
+  });
+}
+
+// ============================================
+// PUZZLE ENDPOINTS
+// ============================================
+
+/**
+ * Get puzzle questions
+ */
+export async function getPuzzleQuestions() {
+  return apiFetch(API.puzzle.questions);
+}
+
+/**
+ * Analyze personality responses and generate puzzle
+ */
+export async function analyzePersonalityPuzzle(responses: Record<string, string>, token?: string) {
+  return apiFetch(API.puzzle.analyze, {
+    method: 'POST',
+    body: JSON.stringify(responses),
+    token,
+  });
+}
+
+/**
+ * Reassess a personality dimension
+ */
+export async function reassessDimension(data: {
+  dimension: string;
+  entries: string[];
+  current_score: number;
+}, token: string) {
+  return apiFetch(API.puzzle.reassess, {
+    token,
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// ============================================
+// AI TEACHER ENDPOINTS
+// ============================================
+
 /**
  * Chat with AI teacher
  */
@@ -143,46 +218,60 @@ export async function getAIFeedback(performanceData: any, token: string) {
   });
 }
 
+// ============================================
+// PITCH ENDPOINTS
+// ============================================
+
 /**
- * Submit collaboration action
+ * Analyze pitch with video/audio
  */
-export async function submitCollaborationAction(
-  scenarioId: string,
-  action: string,
-  token: string,
-  context?: string
+export async function analyzePitch(
+  videoFrames: string[] | null,
+  audioBase64: string | null,
+  transcript: string,
+  token: string
 ) {
-  return apiFetch(API.collaboration.action, {
+  return apiFetch(API.pitch.analyze, {
     token,
     method: 'POST',
     body: JSON.stringify({
-      scenario_id: scenarioId,
-      action,
-      context,
+      video_frames: videoFrames,
+      audio_base64: audioBase64,
+      transcript: transcript,
     }),
   });
 }
 
 /**
- * Get collaboration history
+ * Analyze pitch deck
  */
-export async function getCollaborationHistory(token: string) {
-  return apiFetch(API.collaboration.history, {
-    token,
+export async function analyzePitchDeck(file: File, token: string) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(API.pitch.deckAnalyze, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
   });
+
+  if (!response.ok) {
+    throw new Error(`API Error: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
 }
 
 /**
- * Analyze pitch
+ * Extract slides from pitch deck
  */
-export async function analyzePitch(
-  audioData: Blob,
-  token: string
-) {
+export async function extractDeckSlides(file: File, token: string) {
   const formData = new FormData();
-  formData.append('file', audioData);
+  formData.append('file', file);
 
-  const response = await fetch(API.pitch.analyze, {
+  const response = await fetch(API.pitch.deckExtract, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -206,20 +295,153 @@ export async function getPitchHistory(token: string) {
   });
 }
 
+// ============================================
+// COLLABORATION ENDPOINTS
+// ============================================
+
 /**
- * Get puzzle questions
+ * Start a collaboration session
  */
-export async function getPuzzleQuestions() {
-  return apiFetch(API.puzzle.questions);
+export async function startCollaborationSession(
+  scenarioId: string,
+  token: string
+) {
+  return apiFetch(API.collaboration.start, {
+    token,
+    method: 'POST',
+    body: JSON.stringify({
+      scenario_id: scenarioId,
+    }),
+  });
 }
 
 /**
- * Analyze personality responses and generate puzzle
+ * Send a turn in collaboration simulation
  */
-export async function analyzePersonalityPuzzle(responses: Record<string, string>, token?: string) {
-  return apiFetch(API.puzzle.analyze, {
+export async function submitCollaborationTurn(
+  sessionId: string,
+  userMessage: string,
+  token: string
+) {
+  return apiFetch(API.collaboration.turn, {
+    token,
     method: 'POST',
-    body: JSON.stringify(responses),
+    body: JSON.stringify({
+      session_id: sessionId,
+      user_message: userMessage,
+    }),
+  });
+}
+
+// ============================================
+// LANGUAGE IMPROVEMENT ENDPOINTS
+// ============================================
+
+/**
+ * Analyze language/speech for pronunciation and fluency
+ */
+export async function analyzeLanguageImprovement(
+  audioFile: File,
+  language: string,
+  userLevel: string,
+  goal: string,
+  token: string
+) {
+  const formData = new FormData();
+  formData.append('file', audioFile);
+  formData.append('language', language);
+  formData.append('user_level', userLevel);
+  formData.append('goal', goal);
+
+  const response = await fetch(API.languageImprovement.analyze, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`API Error: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// ============================================
+// VIDEO ENDPOINTS
+// ============================================
+
+/**
+ * Upload a video
+ */
+export async function uploadVideo(
+  file: File,
+  lessonId?: string,
+  token?: string
+) {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (lessonId) {
+    formData.append('lesson_id', lessonId);
+  }
+
+  const response = await fetch(API.videos.upload, {
+    method: 'POST',
+    headers: {
+      ...(token && { Authorization: `Bearer ${token}` }),
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`API Error: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get list of user's videos
+ */
+export async function listVideos(token: string) {
+  return apiFetch(API.videos.list, {
     token,
   });
+}
+
+/**
+ * Get signed URL for a video
+ */
+export async function getVideoUrl(fileName: string, token: string) {
+  return apiFetch(API.videos.url(fileName), {
+    token,
+  });
+}
+
+/**
+ * Delete a video
+ */
+export async function deleteVideo(fileName: string, token: string) {
+  return apiFetch(API.videos.delete(fileName), {
+    token,
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Download a video
+ */
+export async function downloadVideo(fileName: string, token: string) {
+  const response = await fetch(API.videos.download(fileName), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`API Error: ${response.status} ${response.statusText}`);
+  }
+
+  return response.blob();
 }

@@ -1,0 +1,70 @@
+from langchain_groq import ChatGroq
+import os
+from langchain_core.prompts import ChatPromptTemplate
+from ..pitch_graph_state import PitchAnalysisState
+from ..tools.stress_tools import analyze_filler_words
+import json
+try:
+    from opik import track
+except ImportError:
+    def track(func): return func
+
+from ..utils.json_utils import parse_json_robustly
+
+@track
+async def stress_agent(state: PitchAnalysisState):
+    """
+    Advanced Psychological Stress Monitoring Agent.
+    """
+    print("--- STRESS AGENT: CORE PSYCHOMETRICS ---")
+    try:
+        transcript = state.get("transcript", "")
+        filler_metrics = analyze_filler_words.invoke(transcript)
+        tone_data = state.get("tone_analysis", {})
+        posture_data = state.get("posture_analysis", {})
+        
+        llm = ChatGroq(
+            model="llama-3.1-8b-instant",
+            temperature=0.1,
+            groq_api_key=os.getenv("GROQ_API_KEY"),
+            model_kwargs={"response_format": {"type": "json_object"}}
+        )
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a Stress & Performance Psychologist. 
+             Combine TEXT fillers, VOCAL tones, and BODY posture to determine stress levels.
+             Respond ONLY in valid JSON.
+             {{
+                "stress_score": int,
+                "resilience_score": int,
+                "feedback": "string",
+                "nervous_habits": ["habit1", "habit2"]
+             }}
+             """),
+            ("user", "Fillers: {fillers}. Tone: {tone}. Posture: {posture}")
+        ])
+        
+        chain = prompt | llm
+        response = await chain.ainvoke({
+            "fillers": json.dumps(filler_metrics),
+            "tone": json.dumps(tone_data),
+            "posture": json.dumps(posture_data)
+        })
+        
+        content = response.content.strip()
+        analysis = parse_json_robustly(content)
+
+        if not analysis:
+            print(f"--- FAILED TO PARSE STRESS ANALYSIS. CONTENT: {content[:200]}... ---")
+            analysis = {
+                "stress_score": 30,
+                "resilience_score": 80,
+                "feedback": "You appear focused and calm. Minimal stress markers detected.",
+                "nervous_habits": ["None observed"]
+            }
+
+        print(f"STRESS RESULT: {json.dumps(analysis, indent=2)}")
+        return {"stress_analysis": analysis}
+    except Exception as e:
+        print(f"!!! STRESS AGENT FAILED: {str(e)} !!!")
+        return {"stress_analysis": {"stress_score": 0, "feedback": "Stress analysis failed. Check API configuration.", "nervous_habits": []}}
